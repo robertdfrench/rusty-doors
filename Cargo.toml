@@ -1,0 +1,7 @@
+[package]
+name = "webhinge"
+version = "0.1.0"
+authors = ["Robert D. French <robert@robertdfrench.me>"]
+
+[dependencies]
+libc = "0.2.0"
