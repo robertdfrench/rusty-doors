@@ -1,21 +1,41 @@
-extern crate libc;
-use libc::{c_int, O_RDONLY};
-use libc::open;
-use std::ffi::CString;
+use std::env;
+use std::{thread, time};
+use std::fs::File;
 
-extern {
-	fn door_call(d: c_int, params: c_int) -> c_int;
+mod door;
+
+fn client() {
+	match File::open("server.door") {
+		Ok(file) => {
+			let door = door::from(file);
+			if !door.call() {
+				panic!("Could not call door bud");
+			}
+		}
+		Err(_e) => panic!("No such door bud")
+	}
+}
+
+fn server() {
+	let path = "server.door";
+	match door::server_safe_open(path) {
+		None => panic!("Could not prepare a door on the filesystem"),
+		Some(_file) => {
+			match door::create_at(path) {
+				None => panic!("Could not create a door"),
+				Some(_d) => {
+					let x = time::Duration::from_millis(1000 * 360);
+					thread::sleep(x);
+				}
+			}
+		}
+	}
 }
 
 fn main() {
-	let path = CString::new("/root/revolving-door/40_knock_knock/server.door").unwrap();
-	let door = unsafe { open(path.as_ptr(), O_RDONLY) };
-
-	if door < 0 {
-		panic!("Could not open door");
+	match env::var("SERVER") {
+		Ok(_val) => server(),
+		Err(_e) => client(),
 	}
-	
-	let work = unsafe { door_call(door, 0) };
-	println!("Door call results: {}", work);
 }
 
