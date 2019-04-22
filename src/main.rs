@@ -2,6 +2,7 @@ use std::env;
 use std::{thread, time};
 use std::fs::File;
 
+#[macro_use]
 mod door;
 
 fn client() {
@@ -16,12 +17,17 @@ fn client() {
 	}
 }
 
+fn answer() {
+	println!("I am a normal ass Rust function");
+}
+doorfn!(answer);
+
 fn server() {
 	let path = "server.door";
 	match door::server_safe_open(path) {
 		None => panic!("Could not prepare a door on the filesystem"),
 		Some(_file) => {
-			match door::create_at(path) {
+			match door::create_at(doors::answer, path) {
 				None => panic!("Could not create a door"),
 				Some(_d) => {
 					let x = time::Duration::from_millis(1000 * 360);

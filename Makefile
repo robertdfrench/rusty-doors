@@ -8,7 +8,7 @@ server.door: target/debug/webhinge
 	sleep 1
 	[ -e $@ ]
 
-target/debug/webhinge: $(wildcard src/*.rs)
+target/debug/webhinge: $(wildcard src/**/*.rs)
 	cargo build
 
 clean:
