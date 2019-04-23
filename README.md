@@ -1,48 +1,44 @@
 # Rusty Doors
 *Rust is great. Doors are great. Putting them together is not yet great.*
 
-What would be great:
-```rust
-/* Server process */
-fn server(data: &mut Vec<T>, descriptors: &mut Vec<Descriptors>) {
-	/* Do some great stuff here */
-}
 
-fn main() {
-	door::create(server, "/tmp/server.door");
-	sleep();
-}
-
-/* Client process */
-fn main() {
-	let door = door::open("/tmp/server.door");
-	/* fill data and descriptors with some great stuff */
-	door.call(data, descriptors)
-```
-
-What we have currently (not yet great):
+What we have currently:
 ```rust
 /* Server process */
 
-fn server() {
-	println!("I was invoked");
-}
-
-doorfn!(server);
+doorfn!(Server() {
+	/* Do some great server stuff */
+});
 
 fn main() {
 	let path = "server.door";
-	match door::server_safe_open(path) {
+	match Server::attach_to("server.door") {
 		None => panic!("Could not prepare a door on the filesystem"),
-		Some(_file) => {
-			match door::create_at(doors::server, path) {
-				None => panic!("Could not create a door"),
-				Some(_d) => {
-					let x = time::Duration::from_millis(1000 * 360);
-					thread::sleep(x);
-				}
-			}
+		Some(_d) => {
+			let x = time::Duration::from_millis(1000 * 360);
+			thread::sleep(x);
 		}
 	}
+}
+```
+
+What we want:
+```rust
+#[doorfn]
+fn Server(data: vec<MyType>, descriptors: vec<Descriptor>, cookie: i32) {
+	/* Do some great server stuf */
+}
+
+fn main() {
+	Server::attach_to("server.door")?;
+	door::await_clients(); 
+}
+```
+
+and in the client:
+```rust
+fn main() {
+	let server = File::open("server.door")?.into_door();
+	server.call()?;
 }
 ```
