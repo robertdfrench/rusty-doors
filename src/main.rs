@@ -17,23 +17,18 @@ fn client() {
 	}
 }
 
-fn answer() {
+doorfn!(Answer() {
 	println!("I am a normal ass Rust function");
-}
-doorfn!(answer);
+});
 
 fn server() {
 	let path = "server.door";
-	match door::server_safe_open(path) {
-		None => panic!("Could not prepare a door on the filesystem"),
-		Some(_file) => {
-			match door::create_at(doors::answer, path) {
-				None => panic!("Could not create a door"),
-				Some(_d) => {
-					let x = time::Duration::from_millis(1000 * 360);
-					thread::sleep(x);
-				}
-			}
+	match Answer::attach_to(path) {
+		None => panic!("Could not create a door"),
+		Some(_d) => {
+			println!("Door has been attached!");
+			let x = time::Duration::from_millis(1000 * 360);
+			thread::sleep(x);
 		}
 	}
 }

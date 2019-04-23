@@ -1,5 +1,11 @@
 extern crate libc;
 use self::libc::{c_int, O_RDWR, O_CREAT, O_EXCL };
+use self::libc::{
+	c_void,
+	c_char,
+	size_t,
+	c_uint,
+};
 use self::libc::open as c_open;
 use std::ptr;
 use std::os::unix::io::IntoRawFd;
@@ -11,6 +17,8 @@ pub mod door_h;
 use self::door_h::{
 	door_call,
 	door_create,
+	door_desc_t,
+	door_return,
 	door_server_proc_t
 };
 
@@ -36,34 +44,36 @@ pub fn server_safe_open(path: &str) -> Option<File> {
 	}
 }
 
+pub trait ServerProcedure {
+	fn rust();
+	extern "C" fn c(
+		_cookie: *const c_void, argp: *const c_char, arg_size: size_t,
+		dp: *const door_desc_t, n_desc: c_uint
+	) {
+		Self::rust();
+		unsafe { door_return(argp, arg_size, dp, n_desc) };
+		panic!("Door return failed!");
+	}
+	fn attach_to(path: &str) -> Option<Door> {
+		match create(Self::c) {
+			None => None,
+			Some(door) => {
+				match server_safe_open(path) {
+					None => None,
+					Some(_d) => mount(door, path)
+				}
+			}
+		}
+	}
+}
+
 #[macro_export]
 macro_rules! doorfn {
-	($i:ident) => {
-		mod doors {
-			extern crate libc;
-			use self::libc::{
-				c_void,
-				c_char,
-				size_t,
-				c_uint,
-			};
-
-			use door::door_h::{
-				door_return,
-				door_desc_t,
-			};
-
-			pub extern "C" fn $i(
-				_cookie: *const c_void,
-				argp: *const c_char,
-				arg_size: size_t,
-				dp: *const door_desc_t,
-				n_desc: c_uint
-			) {
-				::$i();
-				unsafe { door_return(argp, arg_size, dp, n_desc) };
-				panic!("Door return failed!");
-			}
+	($i:ident() $b:block) => {
+		use door::ServerProcedure;
+		struct $i;
+		impl ServerProcedure for $i {
+			fn rust() $b
 		}
 	}
 }
@@ -84,13 +94,6 @@ pub fn mount(door: Door, path: &str) -> Option<Door> {
 		None
 	} else {
 		Some(door)
-	}
-}
-
-pub fn create_at(server_proc: door_server_proc_t, path: &str) -> Option<Door> {
-	match create(server_proc) {
-		None => None,
-		Some(door) => mount(door, path)
 	}
 }
 	
