@@ -1,8 +1,9 @@
 # Rusty Doors
 *Rust is great. Doors are great. Putting them together is not yet great.*
 
+The goal of this crate is to expose the [illumos][1] [Doors API][2] in Rust. Eventually, the unsafe parts of this api should be merged into the "[solarish][3]" section of the libc crate. However, I think Rust will allow for some very expressive, safe ways to work with doors, and that is what I would like this crate to focus on in the long term.
 
-What we have currently:
+### What we have currently
 ```rust
 /* Server process */
 
@@ -22,7 +23,7 @@ fn main() {
 }
 ```
 
-What we want:
+### What we want
 ```rust
 #[doorfn]
 fn Server(data: vec<MyType>, descriptors: vec<Descriptor>, cookie: i32) {
@@ -42,3 +43,7 @@ fn main() {
 	server.call()?;
 }
 ```
+
+[1]: https://illumos.org/
+[2]: https://github.com/robertdfrench/revolving-door
+[3]: https://github.com/rust-lang/libc/tree/master/src/unix/solarish

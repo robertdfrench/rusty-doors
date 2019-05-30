@@ -70,7 +70,7 @@ pub trait ServerProcedure {
 #[macro_export]
 macro_rules! doorfn {
 	($i:ident() $b:block) => {
-		use door::ServerProcedure;
+		use doors::ServerProcedure;
 		struct $i;
 		impl ServerProcedure for $i {
 			fn rust() $b

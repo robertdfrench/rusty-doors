@@ -1,15 +1,15 @@
+#[macro_use]
+extern crate doors;
+
 use std::env;
 use std::{thread, time};
 use std::fs::File;
 
-#[macro_use]
-mod door;
-
 fn client() {
 	match File::open("server.door") {
 		Ok(file) => {
-			let door = door::from(file);
-			if !door.call() {
+			let d = doors::from(file);
+			if !d.call() {
 				panic!("Could not call door bud");
 			}
 		}
