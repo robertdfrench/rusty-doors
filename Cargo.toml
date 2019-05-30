@@ -1,7 +1,12 @@
 [package]
-name = "webhinge"
+name = "doors"
 version = "0.1.0"
 authors = ["Robert D. French <robert@robertdfrench.me>"]
+description = "Access the illumos Doors API from Rust"
+license = "MPL-2.0"
+documentation = "https://github.com/robertdfrench/rusty-doors"
+homepage = "https://github.com/robertdfrench/rusty-doors"
+repository = "https://github.com/robertdfrench/rusty-doors"
 
 [dependencies]
 libc = "0.2.51"
