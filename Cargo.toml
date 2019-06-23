@@ -7,4 +7,4 @@ license = "MPL-2.0"
 repository = "https://github.com/robertdfrench/rusty-doors"
 
 [dependencies]
-libc = "0.2.51"
+libc = { path = "../libc" }
