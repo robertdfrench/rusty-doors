@@ -1,10 +1,11 @@
 [package]
 name = "doors"
 version = "0.1.1"
+edition = "2021"
 authors = ["Robert D. French <robert@robertdfrench.me>"]
 description = "Access the illumos Doors API from Rust"
 license = "MPL-2.0"
 repository = "https://github.com/robertdfrench/rusty-doors"
 
 [dependencies]
-libc = "0.2.51"
+libc = "0.2"

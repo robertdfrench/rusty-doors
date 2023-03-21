@@ -1,113 +1,53 @@
-extern crate libc;
-use self::libc::{c_int, O_RDWR, O_CREAT, O_EXCL };
-use self::libc::{
-	c_void,
-	c_char,
-	size_t,
-	c_uint,
-};
-use self::libc::open as c_open;
-use std::ptr;
-use std::os::unix::io::IntoRawFd;
-use std::os::unix::io::FromRawFd;
-use std::fs::File;
-use std::ffi::CString;
+pub mod illumos;
 
-pub mod door_h;
-use self::door_h::{
-	door_call,
-	door_create,
-	door_desc_t,
-	door_return,
-	door_server_proc_t
-};
+use illumos::door_h;
+use std::os::fd;
+use std::os::fd::AsRawFd;
 
-mod stropts_h;
-use self::stropts_h::fattach;
-
-pub struct Door {
-	descriptor: c_int
+impl AsRawFd for door_h::door_desc_t {
+    fn as_raw_fd(&self) -> fd::RawFd {
+        let d_data = &self.d_data;
+        let d_desc = unsafe { d_data.d_desc };
+        let d_descriptor = d_desc.d_descriptor;
+        d_descriptor as fd::RawFd
+    }
 }
 
-pub fn from(file: File) -> Door {
-	Door { descriptor: file.into_raw_fd() }
+impl door_h::door_desc_t {
+    pub fn new(raw: fd::RawFd, release: bool) -> Self {
+        let d_descriptor = raw as libc::c_int;
+        let d_id = 0;
+        let d_desc = door_h::door_desc_t__d_data__d_desc { d_descriptor, d_id };
+        let d_data = door_h::door_desc_t__d_data { d_desc };
+
+        let d_attributes = match release {
+            false => door_h::DOOR_DESCRIPTOR,
+            true => door_h::DOOR_DESCRIPTOR | door_h::DOOR_RELEASE,
+        };
+        Self {
+            d_attributes,
+            d_data,
+        }
+    }
+
+    pub fn will_release(&self) -> bool {
+        self.d_attributes == (door_h::DOOR_DESCRIPTOR | door_h::DOOR_RELEASE)
+    }
 }
 
-pub fn server_safe_open(path: &str) -> Option<File> {
-	let cpath = CString::new(path).unwrap();
-	let fd = unsafe { c_open(cpath.as_ptr(), O_RDWR|O_CREAT|O_EXCL, 0400) };
-	if fd < 0 {
-		None
-	} else {
-		let file = unsafe { File::from_raw_fd(fd) };
-		Some(file)
-	}
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub trait ServerProcedure {
-	fn rust();
-	extern "C" fn c(
-		_cookie: *const c_void, argp: *const c_char, arg_size: size_t,
-		dp: *const door_desc_t, n_desc: c_uint
-	) {
-		Self::rust();
-		unsafe { door_return(argp, arg_size, dp, n_desc) };
-		panic!("Door return failed!");
-	}
-	fn attach_to(path: &str) -> Option<Door> {
-		match create(Self::c) {
-			None => None,
-			Some(door) => {
-				match server_safe_open(path) {
-					None => None,
-					Some(_d) => mount(door, path)
-				}
-			}
-		}
-	}
-}
+    #[test]
+    fn as_raw_fd() {
+        let dd = door_h::door_desc_t::new(-1, true);
+        assert_eq!(dd.as_raw_fd(), -1);
+    }
 
-#[macro_export]
-macro_rules! doorfn {
-	($i:ident() $b:block) => {
-		use doors::ServerProcedure;
-		struct $i;
-		impl ServerProcedure for $i {
-			fn rust() $b
-		}
-	}
-}
-
-pub fn create(server_proc: door_server_proc_t) -> Option<Door> {
-	let fd = unsafe { door_create(server_proc, ptr::null(), 0) };
-	if fd < 0 {
-		None
-	} else {
-		Some(Door{ descriptor: fd })
-	}
-}
-
-pub fn mount(door: Door, path: &str) -> Option<Door> {
-	let cpath = CString::new(path).unwrap();
-	let success = unsafe { fattach(door.descriptor, cpath.as_ptr()) };
-	if success < 0 {
-		None
-	} else {
-		Some(door)
-	}
-}
-	
-
-impl Door {
-	pub fn call(&self) -> bool {
-		let success = unsafe { door_call(self.descriptor, ptr::null()) };
-		(success >= 0)
-	}
-}
-
-impl Drop for Door {
-	fn drop(&mut self) {
-		let fd = self.descriptor;
-		unsafe { File::from_raw_fd(fd) };
-	}
+    #[test]
+    fn release() {
+        let dd = door_h::door_desc_t::new(-1, true);
+        assert!(dd.will_release());
+    }
 }

@@ -1,16 +1,26 @@
-SHELL=bash
+all: about build format test
 
-test: target/debug/webhinge clean server.door
-	./$<
+about:
+	@banner about
+	@cargo --version
+	@rustc --version
+	@uname -a
 
-server.door: target/debug/webhinge
-	SERVER=1 ./$< &
-	sleep 1
-	[ -e $@ ]
+build:
+	@banner build
+	ptime -m cargo build
+	ptime -m cargo build --release
 
-target/debug/webhinge: $(wildcard src/**/*.rs)
-	cargo build
+buildomat: all
 
-clean:
-	pkill target/debug/webhinge || true
-	rm -rf server.pid server.door
+format:
+	@banner format
+	cargo fmt -- --check
+	cargo clippy
+
+test:
+	@banner test
+	true \
+		&& sleep 1 \
+		&& cargo test \
+		&& wait
