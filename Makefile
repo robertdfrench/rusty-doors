@@ -20,6 +20,13 @@ format: ##: Check for code formatting issues
 	cargo fmt -- --check
 	cargo clippy
 
+.git/hooks/pre-commit:
+	echo "#!/bin/bash\nmake cicd" > .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
+
+hook: .git/hooks/pre-commit ##: Run 'make cicd' as a pre-commit hook
+
+
 test: ##: Run tests against the example servers
 	@banner test
 	true \
