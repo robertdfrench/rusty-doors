@@ -21,6 +21,7 @@ format:
 test:
 	@banner test
 	true \
+		&& (cargo run --example barebones_server &) \
 		&& sleep 1 \
 		&& cargo test \
 		&& wait
