@@ -10,7 +10,6 @@ use std::fs;
 use std::path::Path;
 use std::ptr;
 
-
 // The simplest possible smoke test is to see if we can both call and
 // answer our own door invocation. Remember: door_create does not change
 // control, but door_call and door_return do. So we only need one thread
@@ -31,12 +30,7 @@ extern "C" fn capitalize_string(
     let capitalized = original.to_ascii_uppercase();
     let capitalized = CString::new(capitalized).unwrap();
     unsafe {
-        door_h::door_return(
-            capitalized.as_ptr(),
-            arg_size,
-            ptr::null(),
-            0,
-        )
+        door_h::door_return(capitalized.as_ptr(), arg_size, ptr::null(), 0)
     };
 }
 
@@ -45,8 +39,7 @@ fn main() {
     if door_path.exists() {
         fs::remove_file(door_path).unwrap();
     }
-    let door_path_cstring =
-        CString::new(door_path.to_str().unwrap()).unwrap();
+    let door_path_cstring = CString::new(door_path.to_str().unwrap()).unwrap();
 
     // Create a door for our "Capitalization Server"
     unsafe {

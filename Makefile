@@ -1,24 +1,26 @@
-all: about build format test
+help: ##: Print this help menu
+	@echo "USAGE"
+	@awk -F':' '/##:/ && !/awk/ { OFS="\t"; print "make "$$1,$$3 }' Makefile
 
-about:
+about: ##: Print version information
 	@banner about
 	@cargo --version
 	@rustc --version
 	@uname -a
 
-build:
+build: ##: Build debug and release binaries
 	@banner build
 	ptime -m cargo build
 	ptime -m cargo build --release
 
-buildomat: all
+cicd: about build format test ##: Run the full build pipeline
 
-format:
+format: ##: Check for code formatting issues
 	@banner format
 	cargo fmt -- --check
 	cargo clippy
 
-test:
+test: ##: Run tests against the example servers
 	@banner test
 	true \
 		&& (cargo run --example barebones_server &) \
