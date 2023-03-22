@@ -26,11 +26,17 @@ format: ##: Check for code formatting issues
 
 hook: .git/hooks/pre-commit ##: Run 'make cicd' as a pre-commit hook
 
+launch: ##: Generate launch script for the example servers
+	@find examples -type f -name '*_server.rs' \
+		| xargs -n1 basename \
+		| cut -f1 -d'.' \
+		| xargs -n1 -Iy echo 'cargo run --example y &'
 
 test: ##: Run tests against the example servers
 	@banner test
 	true \
 		&& (cargo run --example barebones_server &) \
+		&& eval `make launch` \
 		&& sleep 1 \
 		&& cargo test \
 		&& wait
