@@ -35,7 +35,6 @@ launch: ##: Generate launch script for the example servers
 test: ##: Run tests against the example servers
 	@banner test
 	true \
-		&& (cargo run --example barebones_server &) \
 		&& eval `make launch` \
 		&& sleep 1 \
 		&& cargo test \

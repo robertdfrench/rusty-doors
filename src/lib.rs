@@ -1,3 +1,4 @@
+pub mod client;
 pub mod illumos;
 
 use illumos::door_h;
@@ -35,9 +36,33 @@ impl door_h::door_desc_t {
     }
 }
 
+impl<'data, 'descriptors, 'response> door_h::door_arg_t {
+    pub fn new(
+        data: &'data [u8],
+        descriptors: &'descriptors [door_h::door_desc_t],
+        response: &'response mut [u8],
+    ) -> Self {
+        let data_ptr = data.as_ptr() as *const libc::c_char;
+        let data_size = data.len() as libc::size_t;
+        let desc_ptr = descriptors.as_ptr();
+        let desc_num = descriptors.len() as libc::c_uint;
+        let rbuf = response.as_ptr() as *const libc::c_char;
+        let rsize = response.len() as libc::size_t;
+        Self {
+            data_ptr,
+            data_size,
+            desc_ptr,
+            desc_num,
+            rbuf,
+            rsize,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use illumos::errno_h;
 
     #[test]
     fn as_raw_fd() {
@@ -46,8 +71,33 @@ mod tests {
     }
 
     #[test]
-    fn release() {
+    fn retain_door_desc_t() {
+        let dd = door_h::door_desc_t::new(-1, false);
+        assert!(!dd.will_release());
+    }
+
+    #[test]
+    fn release_door_desc_t() {
         let dd = door_h::door_desc_t::new(-1, true);
         assert!(dd.will_release());
+    }
+
+    #[test]
+    fn new_door_arg() {
+        let text = b"Hello, World!";
+        let mut buffer = [0; 1024];
+        let args = door_h::door_arg_t::new(text, &vec![], &mut buffer);
+        let door = std::fs::File::open("/tmp/barebones_server.door").unwrap();
+        let door = door.as_raw_fd();
+
+        let rc = unsafe { door_h::door_call(door, &args) };
+        if rc == -1 {
+            assert_ne!(errno_h::errno(), libc::EBADF);
+        }
+        assert_eq!(rc, 0);
+        assert_eq!(args.data_size, 13);
+        let response = unsafe { std::ffi::CStr::from_ptr(args.data_ptr) };
+        let response = response.to_str().unwrap();
+        assert_eq!(response, "HELLO, WORLD!");
     }
 }

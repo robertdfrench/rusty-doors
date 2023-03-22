@@ -114,17 +114,12 @@ extern "C" {
 #[repr(C)]
 pub struct door_arg_t {
     pub data_ptr: *const libc::c_char,
-    /// Request data from the network to the Door Application
-    ///
-    /// Becomes the response data after door_call completes.
     pub data_size: libc::size_t,
 
     pub desc_ptr: *const door_desc_t,
-    /// Array of Descriptors -- unused by Portunus
     pub desc_num: libc::c_uint,
 
     pub rbuf: *const libc::c_char,
-    /// Response data from the Door Application to the network
     pub rsize: libc::size_t,
 }
 
