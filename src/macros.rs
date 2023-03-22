@@ -1,3 +1,13 @@
+/* 
+ * This file was copied, fair and square, under the terms of the MPL. The
+ * original file did not have a copyright notice, but if it did, it would
+ * probably have read something like:
+ *
+ * Copyright 2021 Oxide Computer Company
+ *
+ * I am reproducing that in the spirit of honoring what I guess the original
+ * author intended to do. 
+ */
 //! This module contains a single macro [`macro@door`] for transforming a rust
 //! function into a door handler.
 
