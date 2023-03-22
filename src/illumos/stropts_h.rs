@@ -41,17 +41,15 @@ extern "C" {
     pub fn fdetach(path: *const libc::c_char) -> libc::c_int;
 }
 
+/// When you want to receive a file descriptor from a pipe.
+///
+/// See [`STREAMIO(4I)`] for more information.
+///
+/// [`STREAMIO(4I)`]: https://illumos.org/man/4I/streamio
 #[repr(C)]
 pub struct strrecvfd {
     pub fd: libc::c_int,
     pub uid: libc::uid_t,
     pub gid: libc::gid_t,
     fill: [libc::c_char; 8],
-}
-
-#[cfg(test)]
-mod tests {
-    // See /src/illumos/mod.rs for tests. The doors_h and stropts_h modules rely on each other for
-    // complete functionality, so it's easier to test them together. The only reason they are
-    // defined separately is to mimic how they are defined in illumos' libc headers.
 }

@@ -8,17 +8,9 @@
 
 //! illumos-specific APIs not (yet) found in the libc crate
 //!
-//! Portunus makes heavy use of illumos' [doors] facility, a novel IPC system
-//! that resembles UNIX domain sockets but allows for *much* faster switching
-//! between client and server contexts.  Because of its obscurity and sharp
-//! corners, there is not yet a full representation of the doors API in the
-//! [libc] crate.
-//!
 //! In this module, we represent only the subset of the illumos-specific APIs
-//! that we need for Portunus.
-//!
-//! [doors]: https://github.com/robertdfrench/revolving-door#revolving-doors
-//! [libc]: https://github.com/rust-lang/libc/tree/master/src/unix/solarish
+//! that we need for creating and invoking doors, and for advertising them on
+//! the filesystem.
 
 pub mod door_h;
 pub mod errno_h;

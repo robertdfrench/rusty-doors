@@ -1,3 +1,7 @@
+//! Rust translation of illumos' `errno.h` header file
+//!
+//! This module merely re-exports the subset of the errno api that we
+//! need for this project. It makes no attempt at safety or ergonomics.
 use libc;
 
 /// Good ole UNIX errno
