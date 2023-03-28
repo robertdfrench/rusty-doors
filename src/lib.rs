@@ -1,3 +1,18 @@
+//! A Rust-friendly interface for [illumos Doors][1].
+//!
+//! [Doors][2] are a high-speed, RPC-style interprocess communication facility
+//! for the [illumos][3] operating system. They enable rapid dialogue between
+//! client and server without giving up the CPU timeslice, and are an excellent
+//! alternative to pipes or UNIX domain sockets in situations where IPC latency
+//! matters.
+//!
+//! This crate makes it easier to interact with the Doors API from Rust. It can
+//! help you create clients, define server procedures, and open or create doors
+//! on the filesystem.
+//!
+//! [1]: https://github.com/robertdfrench/revolving-doors
+//! [2]: https://illumos.org/man/3C/door_create
+//! [3]: https://illumos.org
 pub mod client;
 pub mod illumos;
 pub mod server_procedure;
@@ -16,6 +31,23 @@ impl AsRawFd for door_h::door_desc_t {
 }
 
 impl door_h::door_desc_t {
+    /// Create a new `door_desc_t` from a file descriptor.
+    ///
+    /// When passing a file descriptor through a door call, the kernel needs to
+    /// know whether it should *release* that descriptor: that is, should we
+    /// transfer exclusive control of the descriptor to the receiving process,
+    /// or should each process have independent access to the resource
+    /// underlying the descriptor?
+    ///
+    /// Setting `release` to false means that both the server and the client
+    /// will have the same level of access to the underlying resource, and they
+    /// must take care not to cause conflicts.
+    ///
+    /// Setting `release` to true means that the sender will no longer have
+    /// access to the resource -- effecively, the file descriptor will be closed
+    /// once the `door_call` or `door_return` has completed. In this case, the
+    /// recipient will have exclusive control over the resource referenced by
+    /// this file descriptor.
     pub fn new(raw: fd::RawFd, release: bool) -> Self {
         let d_descriptor = raw as libc::c_int;
         let d_id = 0;

@@ -20,14 +20,36 @@ use libc;
 /// Signature for a Door Server Procedure
 ///
 /// All "Server Procedures" (functions which respond to `door_call` requests)
-/// must use this type signature. Because `portunusd` neither shares descriptors
-/// with applications nor makes use of the `cookie` field, we can consider only:
+/// must use this type signature. It accepts five arguments:
 ///
-/// * `argp`
-/// * `arg_size`
+/// * `cookie` - a pointer to some (likely static) data. This is the same value
+/// that is made available to the [`door_call`] function.
+/// * `argp` - a pointer to a data region
+/// * `arg_size` - the length, in bytes, of that data region
+/// * `dp` - a pointer to an array of [`door_desc_t`] objects
+/// * `n_desc` - the number of [`door_desc_t`] objects in that array.
 ///
-/// which together specify an array of bytes.  See [`DOOR_CREATE(3C)`] for
-/// examples and further detail.
+/// See [`DOOR_CREATE(3C)`] for examples and further detail.
+///
+/// ## Examples
+///
+/// ### A Server Procedure Taking No Arguments
+/// ```rust
+/// use doors::illumos::door_h;
+/// use std::ptr;
+///
+/// extern "C" fn hello_no_args(
+///     _cookie: *const libc::c_void,
+///     _argp: *const libc::c_char,
+///     _arg_size: libc::size_t,
+///     _dp: *const door_h::door_desc_t,
+///     _n_desc: libc::c_uint,
+/// ) {
+///     println!("Hello, world!");
+///     unsafe { door_h::door_return(ptr::null(), 0, ptr::null(), 0) };
+/// }
+/// ```
+///
 ///
 /// [`DOOR_CREATE(3C)`]: https://illumos.org/man/3c/door_create
 pub type door_server_procedure_t = extern "C" fn(
