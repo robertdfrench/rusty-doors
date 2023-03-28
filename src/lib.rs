@@ -1,5 +1,6 @@
 pub mod client;
 pub mod illumos;
+pub mod server_procedure;
 
 use illumos::door_h;
 use std::os::fd;

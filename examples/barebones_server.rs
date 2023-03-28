@@ -37,11 +37,6 @@ extern "C" fn capitalize_string(
 fn main() {
     let door_path = Path::new("/tmp/barebones_server.door");
     if door_path.exists() {
-        // TODO: This occasionally fails, throwing an error complaining that the
-        // path doesn't exist. That's okay, because we're just trying to remove
-        // it anyways, but it does speak to a race condition maybe?
-        // We're only in this block because we think the path existed very
-        // recently. Time-of-check vs Time-of-delete?
         fs::remove_file(door_path).unwrap();
     }
     let door_path_cstring = CString::new(door_path.to_str().unwrap()).unwrap();
