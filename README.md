@@ -2,7 +2,10 @@
 
 The goal of this crate is to expose the [illumos][1] [Doors API][2] in
 Rust. This work is influenced by [oxidecomputer/rusty-doors][3], and
-motivated by [PortunusD][4].
+motivated by [PortunusD][4]. The social media preview image is due to
+[Jim Choate](https://www.flickr.com/photos/jimchoate/50854146398) under
+the terms of [CC BY-NC
+2.0](https://creativecommons.org/licenses/by-nc/2.0/).
 
 ## Tests
 Run `make tests` to run the unit tests, and run `make cicd` to run the

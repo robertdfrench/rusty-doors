@@ -15,7 +15,7 @@
 //! [3]: https://illumos.org
 pub mod client;
 pub mod illumos;
-pub mod server_procedure;
+pub mod server;
 
 use illumos::door_h;
 use std::os::fd;

@@ -2,7 +2,7 @@
 //! support. This helps validate that the headers are expressed correctly in
 //! Rust.
 
-use doors::server_procedure::ServerProcedure;
+use doors::server::ServerProcedure;
 use libc;
 use std::fmt;
 use std::sync::atomic::{AtomicU16, Ordering};

@@ -6,6 +6,7 @@ authors = ["Robert D. French <robert@robertdfrench.me>"]
 description = "Access the illumos Doors API from Rust"
 license = "MPL-2.0"
 repository = "https://github.com/robertdfrench/rusty-doors"
+documentation = "https://crates.io/doors"
 
 [dependencies]
 libc = "0.2"
