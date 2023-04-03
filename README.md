@@ -1,17 +1,26 @@
 # Rusty Doors
+![](etc/social_media_preview.jpg)
 
 The goal of this crate is to expose the [illumos][1] [Doors API][2] in
-Rust. This work is influenced by [oxidecomputer/rusty-doors][3], and
-motivated by [PortunusD][4]. The social media preview image is due to
-[Jim Choate](https://www.flickr.com/photos/jimchoate/50854146398) under
-the terms of [CC BY-NC
-2.0](https://creativecommons.org/licenses/by-nc/2.0/).
+Rust. It exposes the native doors API verbatim, and also provides some
+moderately safer abstractions.
+
 
 ## Tests
 Run `make tests` to run the unit tests, and run `make cicd` to run the
 full build pipeline.
 
+
+## Acknowledgements
+* The social media preview image is due to [Jim Choate][5] under the
+  terms of [CC BY-NC 2.0][6].
+* This work preceeds, but was reignited by
+  [oxidecomputer/rusty-doors][3].
+
+
+<!-- REFERENCES -->
 [1]: https://illumos.org/
 [2]: https://github.com/robertdfrench/revolving-door
 [3]: https://github.com/oxidecomputer/rusty-doors
-[4]: https://github.com/robertdfrench/portunusd
+[4]: https://www.flickr.com/photos/jimchoate/50854146398
+[5]: https://creativecommons.org/licenses/by-nc/2.0/
