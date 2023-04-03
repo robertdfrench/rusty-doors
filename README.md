@@ -12,8 +12,8 @@ full build pipeline.
 
 
 ## Acknowledgements
-* The social media preview image is due to [Jim Choate][5] under the
-  terms of [CC BY-NC 2.0][6].
+* The social media preview image is due to [Jim Choate][4] under the
+  terms of [CC BY-NC 2.0][5].
 * This work preceeds, but was reignited by
   [oxidecomputer/rusty-doors][3].
 
