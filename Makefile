@@ -1,6 +1,6 @@
 help: ##: Print this help menu
 	@echo "USAGE"
-	@awk -F':' '/##:/ && !/awk/ { OFS="\t"; print "make "$$1,$$3 }' Makefile
+	@awk -F':' '/##:/ && !/awk/ { OFS="\t"; print "make "$$1,$$3 }' Makefile | sort
 
 about: ##: Print version information
 	@banner about
@@ -8,12 +8,12 @@ about: ##: Print version information
 	@rustc --version
 	@uname -a
 
+all: about build format test ##: Run the full build pipeline
+
 build: ##: Build debug and release binaries
 	@banner build
 	ptime -m cargo build
 	ptime -m cargo build --release
-
-cicd: about build format test ##: Run the full build pipeline
 
 format: ##: Check for code formatting issues
 	@banner format
@@ -21,7 +21,7 @@ format: ##: Check for code formatting issues
 	cargo clippy
 
 .git/hooks/pre-commit:
-	echo "#!/bin/bash\nmake cicd" > .git/hooks/pre-commit
+	echo "#!/bin/bash\nmake all" > .git/hooks/pre-commit
 	chmod +x .git/hooks/pre-commit
 
 hook: .git/hooks/pre-commit ##: Run 'make cicd' as a pre-commit hook
