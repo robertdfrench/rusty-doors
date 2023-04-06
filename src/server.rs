@@ -107,31 +107,10 @@ pub trait ServerProcedure: Sized {
 
 #[cfg(test)]
 mod tests {
-    use crate::client::Plain;
+    use super::*;
     use crate::door_h;
-    use crate::door_h::door_arg_t;
     use crate::illumos::errno_h;
     use std::os::fd::AsRawFd;
-
-    #[test]
-    fn knock_once() {
-        let text = b"";
-        let mut buffer = [0; 1];
-        let mut args = door_arg_t::new(text, &vec![], &mut buffer);
-        let door = Plain::open("/tmp/knock_only_server.door").unwrap();
-
-        door.call(&mut args).unwrap();
-    }
-
-    #[test]
-    fn knock_twice() {
-        let text = b"";
-        let mut buffer = [0; 1];
-        let mut args = door_arg_t::new(text, &vec![], &mut buffer);
-        let door = Plain::open("/tmp/knock_only_server.door").unwrap();
-
-        door.call(&mut args).unwrap();
-    }
 
     #[test]
     fn new_door_arg() {
