@@ -1,8 +1,11 @@
 //! Traits for easier Server Procedures
+//!
+//! This should be mostly replaced with proc macros one day.
 
-use crate::illumos::door_h;
 use crate::illumos::door_h::door_create;
 use crate::illumos::door_h::door_desc_t;
+use crate::illumos::door_h::door_return;
+use crate::illumos::door_h::door_server_procedure_t;
 use crate::illumos::errno_h::errno;
 use crate::illumos::stropts_h::fattach;
 use libc;
@@ -10,7 +13,6 @@ use std::ffi;
 use std::os::fd::AsRawFd;
 use std::os::fd::IntoRawFd;
 use std::os::fd::RawFd;
-use std::ptr;
 
 /// Door problems.
 ///
@@ -39,69 +41,140 @@ impl IntoRawFd for Server {
     }
 }
 
-pub trait ServerProcedure: Sized {
-    fn server_procedure(&mut self);
+pub struct Request<'a> {
+    pub cookie: u64,
+    pub data: &'a [u8],
+    pub descriptors: &'a [door_desc_t],
+}
 
+pub struct Response<'a> {
+    pub data: &'a [u8],
+    pub num_descriptors: u32,
+    pub descriptors: [door_desc_t; 2],
+}
+
+impl<'a> Response<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        let descriptors =
+            [door_desc_t::new(-1, true), door_desc_t::new(-1, true)];
+        let num_descriptors = 0;
+        Self {
+            data,
+            descriptors,
+            num_descriptors,
+        }
+    }
+}
+
+pub trait ServerProcedure {
+    fn server_procedure(payload: Request<'_>) -> Response;
+
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     extern "C" fn c_wrapper(
         cookie: *const libc::c_void,
-        _argp: *const libc::c_char,
-        _arg_size: libc::size_t,
-        _dp: *const door_desc_t,
-        _n_desc: libc::c_uint,
+        argp: *const libc::c_char,
+        arg_size: libc::size_t,
+        dp: *const door_desc_t,
+        n_desc: libc::c_uint,
     ) {
-        // let x = [5, 6, 7];
-        // let raw_pointer = x.as_ptr();
-        // let slice = ptr::slice_from_raw_parts(raw_pointer, 3);
-        // assert_eq!(unsafe { &*slice }[2], 7);
-        let x = cookie as *mut Self;
-        unsafe { (*x).server_procedure() };
-        unsafe { door_h::door_return(ptr::null(), 0, ptr::null(), 0) };
+        let data = unsafe {
+            std::slice::from_raw_parts::<u8>(argp as *const u8, arg_size)
+        };
+        let descriptors = unsafe {
+            std::slice::from_raw_parts(dp, n_desc.try_into().unwrap())
+        };
+        let cookie = cookie as u64;
+        let payload = Request {
+            cookie,
+            data,
+            descriptors,
+        };
+        let response = Self::server_procedure(payload);
+        unsafe {
+            door_return(
+                response.data.as_ptr() as *const libc::c_char,
+                response.data.len(),
+                response.descriptors.as_ptr(),
+                response.num_descriptors,
+            )
+        };
     }
 
     /// Make this procedure available on the filesystem (as a door).
-    fn install(&self, path: &str, attrs: u32) -> Result<Server, Error> {
-        let jamb_path = ffi::CString::new(path).unwrap();
+    fn install(cookie: u64, path: &str, attrs: u32) -> Result<Server, Error> {
+        install_server_procedure(Self::c_wrapper, cookie, path, attrs)
+    }
+}
 
-        // Create door
-        let door_descriptor = unsafe {
-            door_create(
-                Self::c_wrapper,
-                ptr::addr_of!(*self) as *const libc::c_void,
-                attrs,
-            )
+pub trait RawServerProcedure {
+    fn server_procedure(cookie: u64, data: &[u8], desc: &[door_desc_t]);
+
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    extern "C" fn c_wrapper(
+        cookie: *const libc::c_void,
+        argp: *const libc::c_char,
+        arg_size: libc::size_t,
+        dp: *const door_desc_t,
+        n_desc: libc::c_uint,
+    ) {
+        let data = unsafe {
+            std::slice::from_raw_parts::<u8>(argp as *const u8, arg_size)
         };
-        if door_descriptor == -1 {
-            return Err(Error::CreateDoor(errno()));
-        }
+        let desc = unsafe {
+            std::slice::from_raw_parts(dp, n_desc.try_into().unwrap())
+        };
+        Self::server_procedure(cookie as u64, data, desc);
+    }
 
-        // Create jamb
-        let create_new = libc::O_RDWR | libc::O_CREAT | libc::O_EXCL;
-        match unsafe { libc::open(jamb_path.as_ptr(), create_new, 0o644) } {
-            -1 => {
-                // Clean up the door, since we aren't going to finish
-                unsafe { libc::close(door_descriptor) };
-                return Err(Error::InstallJamb(errno()));
-            }
-            jamb_descriptor => unsafe {
-                libc::close(jamb_descriptor);
-            },
-        }
+    /// Make this procedure available on the filesystem (as a door).
+    fn install(cookie: u64, path: &str, attrs: u32) -> Result<Server, Error> {
+        install_server_procedure(Self::c_wrapper, cookie, path, attrs)
+    }
+}
 
-        // Attach door to jamb
-        match unsafe { fattach(door_descriptor, jamb_path.as_ptr()) } {
-            -1 => {
-                // Clean up the door and jamb, since we aren't going to finish
-                unsafe { libc::close(door_descriptor) };
-                unsafe {
-                    libc::unlink(jamb_path.as_ptr());
-                }
-                Err(Error::AttachDoor(errno()))
-            }
-            _ => Ok(Server {
-                jamb_path,
-                door_descriptor,
-            }),
+fn install_server_procedure(
+    server_procedure: door_server_procedure_t,
+    cookie: u64,
+    path: &str,
+    attrs: u32,
+) -> Result<Server, Error> {
+    let jamb_path = ffi::CString::new(path).unwrap();
+
+    // Create door
+    let door_descriptor = unsafe {
+        door_create(server_procedure, cookie as *const libc::c_void, attrs)
+    };
+    if door_descriptor == -1 {
+        return Err(Error::CreateDoor(errno()));
+    }
+
+    // Create jamb
+    let create_new = libc::O_RDWR | libc::O_CREAT | libc::O_EXCL;
+    match unsafe { libc::open(jamb_path.as_ptr(), create_new, 0o644) } {
+        -1 => {
+            // Clean up the door, since we aren't going to finish
+            unsafe { libc::close(door_descriptor) };
+            return Err(Error::InstallJamb(errno()));
         }
+        jamb_descriptor => unsafe {
+            libc::close(jamb_descriptor);
+        },
+    }
+
+    // Attach door to jamb
+    match unsafe { fattach(door_descriptor, jamb_path.as_ptr()) } {
+        -1 => {
+            // Clean up the door and jamb, since we aren't going to finish
+            unsafe { libc::close(door_descriptor) };
+            unsafe {
+                libc::unlink(jamb_path.as_ptr());
+            }
+            Err(Error::AttachDoor(errno()))
+        }
+        _ => Ok(Server {
+            jamb_path,
+            door_descriptor,
+        }),
     }
 }
 
@@ -119,6 +192,25 @@ mod tests {
         let args = door_h::door_arg_t::new(text, &vec![], &mut buffer);
         let door =
             std::fs::File::open("/tmp/capitalize_door_response.door").unwrap();
+        let door = door.as_raw_fd();
+
+        let rc = unsafe { door_h::door_call(door, &args) };
+        if rc == -1 {
+            assert_ne!(errno_h::errno(), libc::EBADF);
+        }
+        assert_eq!(rc, 0);
+        assert_eq!(args.data_size, 13);
+        let response = unsafe { std::ffi::CStr::from_ptr(args.data_ptr) };
+        let response = response.to_str().unwrap();
+        assert_eq!(response, "HELLO, WORLD!");
+    }
+
+    #[test]
+    fn fancy_capitalize() {
+        let text = b"Hello, World!";
+        let mut buffer = [0; 1024];
+        let args = door_h::door_arg_t::new(text, &vec![], &mut buffer);
+        let door = std::fs::File::open("/tmp/fancy_capitalize.door").unwrap();
         let door = door.as_raw_fd();
 
         let rc = unsafe { door_h::door_call(door, &args) };

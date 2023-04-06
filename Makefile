@@ -9,7 +9,7 @@ about: ##: Print version information
 	@rustc --version
 	@uname -a
 
-all: about build docs format test ##: Run the full build pipeline
+all: about build format test docs ##: Run the full build pipeline
 
 build: ##: Build debug and release binaries
 	@banner build
