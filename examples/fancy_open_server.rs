@@ -8,8 +8,6 @@ use std::fs;
 use std::os::fd::IntoRawFd;
 use std::path::Path;
 
-static mut BUFFER: Vec<u8> = vec![];
-
 struct OpenFile {}
 
 impl ServerProcedure for OpenFile {
@@ -17,8 +15,7 @@ impl ServerProcedure for OpenFile {
         let txt_path = std::str::from_utf8(payload.data).unwrap();
         let file = std::fs::File::open(txt_path).unwrap();
 
-        server::Response::new(unsafe { &BUFFER })
-            .add_descriptor(file.into_raw_fd(), true)
+        server::Response::empty().add_descriptor(file.into_raw_fd(), true)
     }
 }
 

@@ -48,13 +48,25 @@ pub struct Request<'a> {
 }
 
 pub struct Response<'a> {
-    pub data: &'a [u8],
+    pub data: Option<&'a [u8]>,
     pub num_descriptors: u32,
     pub descriptors: [door_desc_t; 2],
 }
 
 impl<'a> Response<'a> {
     pub fn new(data: &'a [u8]) -> Self {
+        let descriptors =
+            [door_desc_t::new(-1, true), door_desc_t::new(-1, true)];
+        let num_descriptors = 0;
+        Self {
+            data: Some(data),
+            descriptors,
+            num_descriptors,
+        }
+    }
+
+    pub fn empty() -> Self {
+        let data = None;
         let descriptors =
             [door_desc_t::new(-1, true), door_desc_t::new(-1, true)];
         let num_descriptors = 0;
@@ -102,14 +114,24 @@ pub trait ServerProcedure {
             descriptors,
         };
         let response = Self::server_procedure(payload);
-        unsafe {
-            door_return(
-                response.data.as_ptr() as *const libc::c_char,
-                response.data.len(),
-                response.descriptors.as_ptr(),
-                response.num_descriptors,
-            )
-        };
+        match response.data {
+            Some(data) => unsafe {
+                door_return(
+                    data.as_ptr() as *const libc::c_char,
+                    data.len(),
+                    response.descriptors.as_ptr(),
+                    response.num_descriptors,
+                )
+            },
+            None => unsafe {
+                door_return(
+                    std::ptr::null() as *const libc::c_char,
+                    0,
+                    response.descriptors.as_ptr(),
+                    response.num_descriptors,
+                )
+            },
+        }
     }
 
     /// Make this procedure available on the filesystem (as a door).
