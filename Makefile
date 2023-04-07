@@ -13,8 +13,9 @@ all: about build format test docs ##: Run the full build pipeline
 
 build: ##: Build debug and release binaries
 	@banner build
-	ptime -m cargo build
-	ptime -m cargo build --release
+	cargo build
+	cargo build --examples
+	cargo build --release
 
 docs: ##: Build documentation
 	@banner docs
