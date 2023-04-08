@@ -40,16 +40,3 @@ extern "C" {
     /// [`OPEN(2)`]: https://illumos.org/man/2/open
     pub fn fdetach(path: *const libc::c_char) -> libc::c_int;
 }
-
-/// When you want to receive a file descriptor from a pipe.
-///
-/// See [`STREAMIO(4I)`] for more information.
-///
-/// [`STREAMIO(4I)`]: https://illumos.org/man/4I/streamio
-#[repr(C)]
-pub struct strrecvfd {
-    pub fd: libc::c_int,
-    pub uid: libc::uid_t,
-    pub gid: libc::gid_t,
-    fill: [libc::c_char; 8],
-}
