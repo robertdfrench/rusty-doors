@@ -16,6 +16,71 @@ pub mod door_h;
 pub mod errno_h;
 pub mod stropts_h;
 
+use std::os::fd::RawFd;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
+
+pub enum Error {
+    /// The user is the owner of path but does not have write
+    /// permissions on path or fildes is locked.
+    EACCES,
+
+    /// The fildes argument is not a valid open file descriptor.
+    EBADF,
+
+    /// The path argument is currently a mount point or has a doors file
+    /// descriptor attached to it.
+    EBUSY,
+
+    /// The path argument is a file in a remotely mounted directory.
+    /// Alternatively, the fildes argument does not represent a doors file.
+    EINVAL,
+
+    /// Too many symbolic links were encountered in translating path.
+    ELOOP,
+
+    /// The size of path exceeds `{PATH_MAX}`, or the component of a path name
+    /// is longer than `{NAME_MAX}` while `{_POSIX_NO_TRUNC}` is in effect.
+    ENAMETOOLONG,
+
+    /// The path argument does not exist.
+    ENOENT,
+
+    /// A component of a path prefix is not a directory.
+    ENOTDIR,
+
+    /// The effective user ID is not the owner of path or a
+    /// user with the appropriate privileges.
+    EPERM,
+}
+
+/// Attach a doors-based file descriptor to an object in the file system name
+/// space.
+///
+/// See [`FATTACH(3C)`] for more details.
+///
+/// [`FATTACH(3C)`]: https://illumos.org/man/3C/fattach
+pub fn fattach<P: AsRef<Path>>(fildes: RawFd, path: P) -> Result<(), Error> {
+    let path_bytes = path.as_ref().as_os_str().as_bytes();
+    // TODO: Why is it safe to unwrap here?
+    let c_string = std::ffi::CString::new(path_bytes).unwrap();
+    match unsafe { stropts_h::fattach(fildes, c_string.as_ptr()) } {
+        0 => Ok(()),
+        _ => match errno_h::errno() {
+            libc::EACCES => Err(Error::EACCES),
+            libc::EBADF => Err(Error::EBADF),
+            libc::EBUSY => Err(Error::EBUSY),
+            libc::EINVAL => Err(Error::EINVAL),
+            libc::ELOOP => Err(Error::ELOOP),
+            libc::ENAMETOOLONG => Err(Error::ENAMETOOLONG),
+            libc::ENOENT => Err(Error::ENOENT),
+            libc::ENOTDIR => Err(Error::ENOTDIR),
+            libc::EPERM => Err(Error::EPERM),
+            _ => unreachable!(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

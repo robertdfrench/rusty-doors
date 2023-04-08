@@ -7,12 +7,15 @@ use crate::illumos::door_h::door_desc_t;
 use crate::illumos::door_h::door_return;
 use crate::illumos::door_h::door_server_procedure_t;
 use crate::illumos::errno_h::errno;
-use crate::illumos::stropts_h::fattach;
+use crate::illumos::fattach;
 use libc;
 use std::ffi;
+use std::fs::File;
+use std::io;
 use std::os::fd::AsRawFd;
 use std::os::fd::IntoRawFd;
 use std::os::fd::RawFd;
+use std::path::Path;
 
 /// Door problems.
 ///
@@ -23,7 +26,7 @@ use std::os::fd::RawFd;
 #[derive(Debug)]
 pub enum Error {
     InvalidPath(ffi::NulError),
-    InstallJamb(libc::c_int),
+    InstallJamb(std::io::Error),
     AttachDoor(libc::c_int),
     OpenDoor(std::io::Error),
     DoorCall(libc::c_int),
@@ -166,6 +169,14 @@ pub trait RawServerProcedure {
     }
 }
 
+fn create_new_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
+    File::options()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
 fn install_server_procedure(
     server_procedure: door_server_procedure_t,
     cookie: u64,
@@ -183,21 +194,14 @@ fn install_server_procedure(
     }
 
     // Create jamb
-    let create_new = libc::O_RDWR | libc::O_CREAT | libc::O_EXCL;
-    match unsafe { libc::open(jamb_path.as_ptr(), create_new, 0o644) } {
-        -1 => {
-            // Clean up the door, since we aren't going to finish
-            unsafe { libc::close(door_descriptor) };
-            return Err(Error::InstallJamb(errno()));
-        }
-        jamb_descriptor => unsafe {
-            libc::close(jamb_descriptor);
-        },
-    }
+    let _jamb = match create_new_file(path) {
+        Ok(file) => file,
+        Err(e) => return Err(Error::InstallJamb(e)),
+    };
 
     // Attach door to jamb
-    match unsafe { fattach(door_descriptor, jamb_path.as_ptr()) } {
-        -1 => {
+    match fattach(door_descriptor, path) {
+        Err(_e) => {
             // Clean up the door and jamb, since we aren't going to finish
             unsafe { libc::close(door_descriptor) };
             unsafe {
@@ -205,7 +209,7 @@ fn install_server_procedure(
             }
             Err(Error::AttachDoor(errno()))
         }
-        _ => Ok(Server {
+        Ok(()) => Ok(Server {
             jamb_path,
             door_descriptor,
         }),
@@ -324,5 +328,21 @@ mod tests {
         // for a Rustier way to do this would be considered a personal
         // favor.
         unsafe { libc::free(rbuf as *mut libc::c_void) };
+    }
+
+    #[test]
+    #[should_panic]
+    fn create_new_fails_if_file_exists() {
+        match File::create("/tmp/create_new_fail.txt") {
+            // If we can't create the "original" file, we want the test to fail,
+            // which means that we *don't* want to panic.
+            Err(e) => {
+                eprintln!("{:?}", e);
+                assert!(true)
+            }
+            Ok(_file) => {
+                create_new_file("/tmp/create_new_fail.txt").unwrap();
+            }
+        }
     }
 }
