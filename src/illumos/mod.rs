@@ -16,10 +16,13 @@ pub mod door_h;
 pub mod errno_h;
 pub mod stropts_h;
 
+use std::ops::BitOr;
+use std::ops::BitOrAssign;
 use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
+#[derive(Debug)]
 pub enum Error {
     /// The user is the owner of path but does not have write
     /// permissions on path or fildes is locked.
@@ -32,12 +35,18 @@ pub enum Error {
     /// descriptor attached to it.
     EBUSY,
 
-    /// The path argument is a file in a remotely mounted directory.
-    /// Alternatively, the fildes argument does not represent a doors file.
+    /// Invalid Arguments
+    ///
+    /// * `fattach` - The path argument is a file in a remotely mounted directory.
+    ///   Alternatively, the fildes argument does not represent a doors file.
+    /// * `door_create` - invalid attributes were passed
     EINVAL,
 
     /// Too many symbolic links were encountered in translating path.
     ELOOP,
+
+    /// The process has too many open descriptors.
+    EMFILE,
 
     /// The size of path exceeds `{PATH_MAX}`, or the component of a path name
     /// is longer than `{NAME_MAX}` while `{_POSIX_NO_TRUNC}` is in effect.
@@ -78,6 +87,104 @@ pub fn fattach<P: AsRef<Path>>(fildes: RawFd, path: P) -> Result<(), Error> {
             libc::EPERM => Err(Error::EPERM),
             _ => unreachable!(),
         },
+    }
+}
+
+/// Raw, Unvarnished Server Procedure
+///
+/// This is a function that literally matches the signature given in
+/// [`DOOR_CREATE(3C)`]. It is either written by hand, or generated from a trait
+/// or a macro, but it is not a function to which a trait or a macro is applied.
+///
+/// [`DOOR_CREATE(3C)`]: https://illumos.org/man/3C/door_create
+pub type RawServerProcedure = door_h::door_server_procedure_t;
+
+/// Change a door's behavior
+#[derive(Debug, PartialEq)]
+pub struct DoorAttributes {
+    attrs: u32,
+}
+
+impl DoorAttributes {
+    pub fn none() -> Self {
+        Self { attrs: 0 }
+    }
+
+    pub fn unref() -> Self {
+        Self {
+            attrs: door_h::DOOR_UNREF,
+        }
+    }
+
+    pub fn unref_multi() -> Self {
+        Self {
+            attrs: door_h::DOOR_UNREF_MULTI,
+        }
+    }
+
+    pub fn private() -> Self {
+        Self {
+            attrs: door_h::DOOR_PRIVATE,
+        }
+    }
+
+    pub fn refuse_desc() -> Self {
+        Self {
+            attrs: door_h::DOOR_REFUSE_DESC,
+        }
+    }
+
+    pub fn no_cancel() -> Self {
+        Self {
+            attrs: door_h::DOOR_NO_CANCEL,
+        }
+    }
+
+    pub fn get(&self) -> u32 {
+        self.attrs
+    }
+}
+
+impl BitOr for DoorAttributes {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self {
+            attrs: self.attrs | rhs.attrs,
+        }
+    }
+}
+
+impl BitOrAssign for DoorAttributes {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.attrs |= rhs.attrs;
+    }
+}
+
+/// Create a door descriptor from a server procedure and a cookie.
+///
+/// See [`DOOR_CREATE(3C)`] for more details.
+///
+/// [`DOOR_CREATE(3C)`]: https://illumos.org/man/3C/door_create
+pub fn door_create(
+    server_procedure: RawServerProcedure,
+    cookie: u64,
+    attributes: DoorAttributes,
+) -> Result<RawFd, Error> {
+    let result = unsafe {
+        door_h::door_create(
+            server_procedure,
+            cookie as *const libc::c_void,
+            attributes.get(),
+        )
+    };
+    match result {
+        -1 => match errno_h::errno() {
+            libc::EINVAL => Err(Error::EINVAL),
+            libc::EMFILE => Err(Error::EMFILE),
+            _ => unreachable!(),
+        },
+        fd => Ok(fd as RawFd),
     }
 }
 

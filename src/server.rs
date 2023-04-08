@@ -2,6 +2,7 @@
 //!
 //! This should be mostly replaced with proc macros one day.
 
+use crate::illumos;
 use crate::illumos::door_h::door_create;
 use crate::illumos::door_h::door_desc_t;
 use crate::illumos::door_h::door_return;
@@ -27,7 +28,7 @@ use std::path::Path;
 pub enum Error {
     InvalidPath(ffi::NulError),
     InstallJamb(std::io::Error),
-    AttachDoor(libc::c_int),
+    AttachDoor(illumos::Error),
     OpenDoor(std::io::Error),
     DoorCall(libc::c_int),
     CreateDoor(libc::c_int),
@@ -201,13 +202,11 @@ fn install_server_procedure(
 
     // Attach door to jamb
     match fattach(door_descriptor, path) {
-        Err(_e) => {
+        Err(e) => {
             // Clean up the door and jamb, since we aren't going to finish
             unsafe { libc::close(door_descriptor) };
-            unsafe {
-                libc::unlink(jamb_path.as_ptr());
-            }
-            Err(Error::AttachDoor(errno()))
+            std::fs::remove_file(path).ok();
+            Err(Error::AttachDoor(e))
         }
         Ok(()) => Ok(Server {
             jamb_path,

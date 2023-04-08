@@ -201,6 +201,18 @@ pub const DOOR_DESCRIPTOR: door_attr_t = 0x10000; // A file descriptor is being 
 /// descriptor, then we need to release it here.
 pub const DOOR_RELEASE: door_attr_t = 0x40000; // Passed references are also released.
 
+/// Use a private pool of server threads
+pub const DOOR_PRIVATE: door_attr_t = 0x02;
+
+/// No server thread cancel on client abort
+pub const DOOR_NO_CANCEL: door_attr_t = 0x80;
+
+/// Deliver an unref notification with door
+pub const DOOR_UNREF: door_attr_t = 0x01;
+
+/// Deliver unref notification more than once
+pub const DOOR_UNREF_MULTI: door_attr_t = 0x10;
+
 /// `d_data` component of [`door_desc_t`]
 ///
 /// This is not a real doors data structure *per se*, but rather the `d_data`
