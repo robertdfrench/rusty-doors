@@ -3,11 +3,9 @@
 //! This should be mostly replaced with proc macros one day.
 
 use crate::illumos;
-use crate::illumos::door_h::door_create;
 use crate::illumos::door_h::door_desc_t;
 use crate::illumos::door_h::door_return;
 use crate::illumos::door_h::door_server_procedure_t;
-use crate::illumos::errno_h::errno;
 use crate::illumos::fattach;
 use libc;
 use std::ffi;
@@ -31,7 +29,7 @@ pub enum Error {
     AttachDoor(illumos::Error),
     OpenDoor(std::io::Error),
     DoorCall(libc::c_int),
-    CreateDoor(libc::c_int),
+    CreateDoor(illumos::Error),
 }
 
 pub struct Server {
@@ -139,7 +137,11 @@ pub trait ServerProcedure {
     }
 
     /// Make this procedure available on the filesystem (as a door).
-    fn install(cookie: u64, path: &str, attrs: u32) -> Result<Server, Error> {
+    fn install(
+        cookie: u64,
+        path: &str,
+        attrs: illumos::DoorAttributes,
+    ) -> Result<Server, Error> {
         install_server_procedure(Self::c_wrapper, cookie, path, attrs)
     }
 }
@@ -165,7 +167,11 @@ pub trait RawServerProcedure {
     }
 
     /// Make this procedure available on the filesystem (as a door).
-    fn install(cookie: u64, path: &str, attrs: u32) -> Result<Server, Error> {
+    fn install(
+        cookie: u64,
+        path: &str,
+        attrs: illumos::DoorAttributes,
+    ) -> Result<Server, Error> {
         install_server_procedure(Self::c_wrapper, cookie, path, attrs)
     }
 }
@@ -182,17 +188,16 @@ fn install_server_procedure(
     server_procedure: door_server_procedure_t,
     cookie: u64,
     path: &str,
-    attrs: u32,
+    attrs: illumos::DoorAttributes,
 ) -> Result<Server, Error> {
     let jamb_path = ffi::CString::new(path).unwrap();
 
     // Create door
-    let door_descriptor = unsafe {
-        door_create(server_procedure, cookie as *const libc::c_void, attrs)
-    };
-    if door_descriptor == -1 {
-        return Err(Error::CreateDoor(errno()));
-    }
+    let door_descriptor =
+        match illumos::door_create(server_procedure, cookie, attrs) {
+            Ok(fd) => fd,
+            Err(e) => return Err(Error::CreateDoor(e)),
+        };
 
     // Create jamb
     let _jamb = match create_new_file(path) {

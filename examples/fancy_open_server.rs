@@ -2,6 +2,7 @@
 //! support. This helps validate that the headers are expressed correctly in
 //! Rust.
 
+use doors::illumos::DoorAttributes;
 use doors::server;
 use doors::server::ServerProcedure;
 use std::fs;
@@ -24,7 +25,8 @@ fn main() {
     if door_path.exists() {
         fs::remove_file(door_path).unwrap();
     }
-    OpenFile::install(0, "/tmp/fancy_open_server.door", 0).unwrap();
+    OpenFile::install(0, "/tmp/fancy_open_server.door", DoorAttributes::none())
+        .unwrap();
 
     std::thread::sleep(std::time::Duration::from_secs(5));
 }
