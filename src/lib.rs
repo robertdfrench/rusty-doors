@@ -95,6 +95,7 @@ impl<'data, 'descriptors, 'response> door_h::door_arg_t {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use client;
     use illumos::errno_h;
 
     #[test]
@@ -132,5 +133,23 @@ mod tests {
         let response = unsafe { std::ffi::CStr::from_ptr(args.data_ptr) };
         let response = response.to_str().unwrap();
         assert_eq!(response, "HELLO, WORLD!");
+    }
+
+    #[test]
+    fn increment_shared_counter() {
+        let increment =
+            client::Plain::open("/tmp/key_value_store_server.door").unwrap();
+        let fetch =
+            client::Plain::open("/tmp/key_value_store_server_fetch.door")
+                .unwrap();
+
+        let mut rbuf: [u8; 1] = [0];
+
+        let mut arg = crate::door_h::door_arg_t::new(&[], &[], &mut rbuf);
+        increment.call(&mut arg).unwrap();
+        increment.call(&mut arg).unwrap();
+        increment.call(&mut arg).unwrap();
+        fetch.call(&mut arg).unwrap();
+        assert_eq!(rbuf[0], 3);
     }
 }

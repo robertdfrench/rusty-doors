@@ -11,8 +11,10 @@ use std::path::Path;
 
 struct OpenFile {}
 
-impl ServerProcedure for OpenFile {
-    fn server_procedure(payload: server::Request<'_>) -> server::Response {
+impl<'a> ServerProcedure<&'a [u8]> for OpenFile {
+    fn server_procedure(
+        payload: server::Request<'_>,
+    ) -> server::Response<&'a [u8]> {
         let txt_path = std::str::from_utf8(payload.data).unwrap();
         let file = std::fs::File::open(txt_path).unwrap();
 

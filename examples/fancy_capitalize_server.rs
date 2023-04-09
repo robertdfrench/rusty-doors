@@ -13,8 +13,10 @@ use std::ptr;
 
 struct Capitalize {}
 
-impl ServerProcedure for Capitalize {
-    fn server_procedure(payload: server::Request<'_>) -> server::Response {
+impl<'a> ServerProcedure<&'a [u8]> for Capitalize {
+    fn server_procedure(
+        payload: server::Request<'_>,
+    ) -> server::Response<&'a [u8]> {
         let original = std::str::from_utf8(payload.data).unwrap();
         let capitalized = original.to_ascii_uppercase();
         unsafe { BUFFER = capitalized };

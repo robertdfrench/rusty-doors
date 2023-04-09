@@ -15,6 +15,7 @@ use std::os::fd::AsRawFd;
 use std::os::fd::IntoRawFd;
 use std::os::fd::RawFd;
 use std::path::Path;
+use std::path::PathBuf;
 
 /// Door problems.
 ///
@@ -33,7 +34,7 @@ pub enum Error {
 }
 
 pub struct Server {
-    pub jamb_path: ffi::CString,
+    pub jamb_path: PathBuf,
     pub door_descriptor: libc::c_int,
 }
 
@@ -49,14 +50,14 @@ pub struct Request<'a> {
     pub descriptors: &'a [door_desc_t],
 }
 
-pub struct Response<'a> {
-    pub data: Option<&'a [u8]>,
+pub struct Response<C: AsRef<[u8]>> {
+    pub data: Option<C>,
     pub num_descriptors: u32,
     pub descriptors: [door_desc_t; 2],
 }
 
-impl<'a> Response<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
+impl<C: AsRef<[u8]>> Response<C> {
+    pub fn new(data: C) -> Self {
         let descriptors =
             [door_desc_t::new(-1, true), door_desc_t::new(-1, true)];
         let num_descriptors = 0;
@@ -92,8 +93,8 @@ impl<'a> Response<'a> {
     }
 }
 
-pub trait ServerProcedure {
-    fn server_procedure(payload: Request<'_>) -> Response;
+pub trait ServerProcedure<C: AsRef<[u8]>> {
+    fn server_procedure(payload: Request<'_>) -> Response<C>;
 
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     extern "C" fn c_wrapper(
@@ -119,8 +120,8 @@ pub trait ServerProcedure {
         match response.data {
             Some(data) => unsafe {
                 door_return(
-                    data.as_ptr() as *const libc::c_char,
-                    data.len(),
+                    data.as_ref().as_ptr() as *const libc::c_char,
+                    data.as_ref().len(),
                     response.descriptors.as_ptr(),
                     response.num_descriptors,
                 )
@@ -137,11 +138,24 @@ pub trait ServerProcedure {
     }
 
     /// Make this procedure available on the filesystem (as a door).
-    fn install(
+    fn install<P: AsRef<Path>>(
         cookie: u64,
-        path: &str,
+        path: P,
         attrs: illumos::DoorAttributes,
     ) -> Result<Server, Error> {
+        install_server_procedure(Self::c_wrapper, cookie, path, attrs)
+    }
+
+    fn force_install<P: AsRef<Path>>(
+        cookie: u64,
+        path: P,
+        attrs: illumos::DoorAttributes,
+    ) -> Result<Server, Error> {
+        if path.as_ref().exists() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                return Err(Error::InstallJamb(e));
+            }
+        }
         install_server_procedure(Self::c_wrapper, cookie, path, attrs)
     }
 }
@@ -167,9 +181,9 @@ pub trait RawServerProcedure {
     }
 
     /// Make this procedure available on the filesystem (as a door).
-    fn install(
+    fn install<P: AsRef<Path>>(
         cookie: u64,
-        path: &str,
+        path: P,
         attrs: illumos::DoorAttributes,
     ) -> Result<Server, Error> {
         install_server_procedure(Self::c_wrapper, cookie, path, attrs)
@@ -184,14 +198,12 @@ fn create_new_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
         .open(path)
 }
 
-fn install_server_procedure(
+fn install_server_procedure<P: AsRef<Path>>(
     server_procedure: door_server_procedure_t,
     cookie: u64,
-    path: &str,
+    path: P,
     attrs: illumos::DoorAttributes,
 ) -> Result<Server, Error> {
-    let jamb_path = ffi::CString::new(path).unwrap();
-
     // Create door
     let door_descriptor =
         match illumos::door_create(server_procedure, cookie, attrs) {
@@ -200,21 +212,21 @@ fn install_server_procedure(
         };
 
     // Create jamb
-    let _jamb = match create_new_file(path) {
+    let _jamb = match create_new_file(&path) {
         Ok(file) => file,
         Err(e) => return Err(Error::InstallJamb(e)),
     };
 
     // Attach door to jamb
-    match fattach(door_descriptor, path) {
+    match fattach(door_descriptor, &path) {
         Err(e) => {
             // Clean up the door and jamb, since we aren't going to finish
             unsafe { libc::close(door_descriptor) };
-            std::fs::remove_file(path).ok();
+            std::fs::remove_file(&path).ok();
             Err(Error::AttachDoor(e))
         }
         Ok(()) => Ok(Server {
-            jamb_path,
+            jamb_path: path.as_ref().to_path_buf(),
             door_descriptor,
         }),
     }
