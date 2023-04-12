@@ -1,8 +1,5 @@
 banner=printf "\033[35m"; banner $@; print "\033[0m";
 
-shit: ##: nothing
-	@$(banner)
-
 help: ##: Print this help menu
 	@echo "USAGE"
 	@awk -F':' '/##:/ && !/awk/ { OFS="\t"; print "make "$$1,$$3 }' Makefile \
