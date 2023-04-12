@@ -1,10 +1,15 @@
+banner=printf "\033[35m"; banner $@; print "\033[0m";
+
+shit: ##: nothing
+	@$(banner)
+
 help: ##: Print this help menu
 	@echo "USAGE"
 	@awk -F':' '/##:/ && !/awk/ { OFS="\t"; print "make "$$1,$$3 }' Makefile \
 		| sort
 
 about: ##: Print version information
-	@banner about
+	@$(banner)
 	@cargo --version
 	@rustc --version
 	@uname -a
@@ -12,17 +17,17 @@ about: ##: Print version information
 all: about build format test docs ##: Run the full build pipeline
 
 build: ##: Build debug and release binaries
-	@banner build
+	@$(banner)
 	cargo build
 	cargo build --examples
 	cargo build --release
 
 docs: ##: Build documentation
-	@banner docs
+	@$(banner)
 	cargo doc
 
 format: ##: Check for code formatting issues
-	@banner format
+	@$(banner)
 	cargo fmt -- --check
 	cargo clippy
 
@@ -39,7 +44,7 @@ launch: ##: Generate launch script for the example servers
 		| xargs -n1 -Iy echo 'cargo run --example y &'
 
 test: ##: Run tests against the example servers
-	@banner test
+	@$(banner)
 	true \
 		&& eval `make launch` \
 		&& sleep 1 \
