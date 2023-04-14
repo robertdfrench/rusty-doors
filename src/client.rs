@@ -68,24 +68,24 @@ pub enum DoorCallError {
 
 /// Less unsafe door client (compared to raw file descriptors)
 ///
-/// Plains are automatically closed when they go out of scope. Errors detected
+/// Clients are automatically closed when they go out of scope. Errors detected
 /// on closing are ignored by the implementation of `Drop`, just like in
 /// [`File`].
-pub struct Plain(RawFd);
+pub struct Client(RawFd);
 
-impl FromRawFd for Plain {
+impl FromRawFd for Client {
     unsafe fn from_raw_fd(raw: RawFd) -> Self {
         Self(raw)
     }
 }
 
-impl Drop for Plain {
+impl Drop for Client {
     fn drop(&mut self) {
         unsafe { libc::close(self.0) };
     }
 }
 
-impl Plain {
+impl Client {
     /// Open a door client like you would a file
     pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let file = File::open(path)?;
@@ -127,7 +127,7 @@ mod tests {
         let mut buffer = [0; 1024];
         let mut args = door_arg_t::new(text, &vec![], &mut buffer);
         let file = std::fs::File::open("/tmp/barebones_server.door").unwrap();
-        let door = unsafe { Plain::from_raw_fd(file.as_raw_fd()) };
+        let door = unsafe { Client::from_raw_fd(file.as_raw_fd()) };
 
         door.call(&mut args).unwrap();
         assert_eq!(args.data_size, 13);
@@ -141,7 +141,7 @@ mod tests {
         let text = b"Hello, World!";
         let mut buffer = [0; 1024];
         let mut args = door_arg_t::new(text, &vec![], &mut buffer);
-        let door = Plain::open("/tmp/barebones_server.door").unwrap();
+        let door = Client::open("/tmp/barebones_server.door").unwrap();
 
         door.call(&mut args).unwrap();
         assert_eq!(args.data_size, 13);
@@ -157,7 +157,7 @@ mod tests {
         let mut args = door_arg_t::new(text, &vec![], &mut buffer);
         let file = std::fs::File::open("/tmp/barebones_server.door").unwrap();
         let fd = file.as_raw_fd();
-        let door = unsafe { Plain::from_raw_fd(file.into_raw_fd()) };
+        let door = unsafe { Client::from_raw_fd(file.into_raw_fd()) };
 
         door.call(&mut args).unwrap();
         assert_eq!(args.data_size, 13);
@@ -167,7 +167,7 @@ mod tests {
 
         drop(door);
 
-        let door = unsafe { Plain::from_raw_fd(fd) };
+        let door = unsafe { Client::from_raw_fd(fd) };
         let mut args = door_arg_t::new(text, &vec![], &mut buffer);
         assert_eq!(door.call(&mut args), Err(DoorCallError::EBADF));
     }

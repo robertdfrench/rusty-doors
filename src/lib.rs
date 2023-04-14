@@ -138,9 +138,9 @@ mod tests {
     #[test]
     fn increment_shared_counter() {
         let increment =
-            client::Plain::open("/tmp/key_value_store_server.door").unwrap();
+            client::Client::open("/tmp/key_value_store_server.door").unwrap();
         let fetch =
-            client::Plain::open("/tmp/key_value_store_server_fetch.door")
+            client::Client::open("/tmp/key_value_store_server_fetch.door")
                 .unwrap();
 
         let mut rbuf: [u8; 1] = [0];
