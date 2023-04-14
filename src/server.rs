@@ -1,6 +1,4 @@
 //! Traits for easier Server Procedures
-//!
-//! This should be mostly replaced with proc macros one day.
 
 use crate::illumos;
 use crate::illumos::door_h::door_desc_t;
@@ -29,9 +27,18 @@ pub enum Error {
     CreateDoor(illumos::Error),
 }
 
+/// A Descriptor for the Door Server
+///
+/// When a door is created, the kernel hands us back a reference to it by giving
+/// us an index in our descriptor table. This is true even if the door hasn't
+/// been attached to the filesystem yet, a la pipes or sockets.
 pub struct Server(RawFd);
 
 impl Server {
+    /// Make this door server available on the filesystem.
+    ///
+    /// This is necessary if we want other processes to be able to find and call
+    /// this door server.
     pub fn install<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
         // Create jamb
         let _jamb = match create_new_file(&path) {
@@ -59,12 +66,28 @@ impl Drop for Server {
     }
 }
 
+/// Server-Side representation of the client's door arguments
+///
+/// This type allows us to write server procedures that accept a single argument
+/// rather than five separate arguments.
 pub struct Request<'a> {
     pub cookie: u64,
     pub data: &'a [u8],
     pub descriptors: &'a [door_desc_t],
 }
 
+/// Server-Side representation of the client's door results
+///
+/// This type can refer to either memory on the stack (which will be cleaned up
+/// automatically when [`door_return`] is called) or memory on the heap (which
+/// will not). If you return an object that refers to memory on the heap, it is
+/// your responsibility to free it later.
+///
+/// Many door servers allocate a per-thread response area so that each thread
+/// can re-use this area for every door invocation assigned to it. That way the
+/// memory leaked is constant. Typically, applications that take this approach
+/// will free these per-thread response areas when the DOOR_UNREF message is
+/// sent.
 pub struct Response<C: AsRef<[u8]>> {
     pub data: Option<C>,
     pub num_descriptors: u32,

@@ -22,6 +22,10 @@ use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
+/// illumos Error Conditions
+///
+/// These are the values that `errno` can return, but presented as a
+/// Rust-friendly enumeration.
 #[derive(Debug)]
 pub enum Error {
     /// The user is the owner of path but does not have write

@@ -80,6 +80,11 @@ impl FromRawFd for Client {
 }
 
 impl Drop for Client {
+    /// Automatically close the door on your way out.
+    ///
+    /// This will close the file descriptor associated with this door, so that
+    /// this process will no longer be able to call this door. For that reason,
+    /// it is a programming error to [`Clone`] this type.
     fn drop(&mut self) {
         unsafe { libc::close(self.0) };
     }
@@ -93,6 +98,18 @@ impl Client {
     }
 
     /// Issue a door call
+    ///
+    /// You are responsible for managing this memory. See [`DOOR_CALL(3C)`].
+    /// Particularly, if, after a `door_call`, the `rbuf` property of
+    /// [`door_arg_t`] is different than what it was before the `door_call`, you
+    /// are responsible for reclaiming this area with [`MUNMAP(2)`] when you are
+    /// done with it.
+    ///
+    /// This crate cannot yet handle this for you. See [Issue
+    /// #11](https://github.com/robertdfrench/rusty-doors/issues/11).
+    ///
+    /// [`DOOR_CALL(3C)`]: https://illumos.org/man/3C/door_call
+    /// [`MUNMAP(2)`]: https://illumos.org/man/2/munmap
     pub fn call(&self, arg: &mut door_arg_t) -> Result<(), DoorCallError> {
         match unsafe { door_call(self.0, arg) } {
             0 => Ok(()),
