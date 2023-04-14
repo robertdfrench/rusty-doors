@@ -160,36 +160,6 @@ pub trait ServerProcedure<C: AsRef<[u8]>> {
     }
 }
 
-pub trait RawServerProcedure {
-    fn server_procedure(cookie: u64, data: &[u8], desc: &[door_desc_t]);
-
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    extern "C" fn c_wrapper(
-        cookie: *const libc::c_void,
-        argp: *const libc::c_char,
-        arg_size: libc::size_t,
-        dp: *const door_desc_t,
-        n_desc: libc::c_uint,
-    ) {
-        let data = unsafe {
-            std::slice::from_raw_parts::<u8>(argp as *const u8, arg_size)
-        };
-        let desc = unsafe {
-            std::slice::from_raw_parts(dp, n_desc.try_into().unwrap())
-        };
-        Self::server_procedure(cookie as u64, data, desc);
-    }
-
-    /// Make this procedure available on the filesystem (as a door).
-    fn install<P: AsRef<Path>>(
-        cookie: u64,
-        path: P,
-        attrs: illumos::DoorAttributes,
-    ) -> Result<Server, Error> {
-        install_server_procedure(Self::c_wrapper, cookie, path, attrs)
-    }
-}
-
 fn create_new_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
     File::options()
         .read(true)
