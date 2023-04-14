@@ -2,7 +2,6 @@
 //! support. This helps validate that the headers are expressed correctly in
 //! Rust.
 
-use doors::illumos::DoorAttributes;
 use doors::server;
 use doors::server::ServerProcedure;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -36,18 +35,17 @@ impl ServerProcedure<[u8; 1]> for Fetch {
 }
 
 fn main() {
-    Increment::force_install(
-        0,
-        "/tmp/key_value_store_server.door",
-        DoorAttributes::none(),
-    )
-    .unwrap();
-    Fetch::force_install(
-        0,
-        "/tmp/key_value_store_server_fetch.door",
-        DoorAttributes::none(),
-    )
-    .unwrap();
+    let increment = Increment::create_server().unwrap();
+    std::fs::remove_file("/tmp/key_value_store_server.door").unwrap();
+    increment
+        .install("/tmp/key_value_store_server.door")
+        .unwrap();
+
+    let fetch = Fetch::create_server().unwrap();
+    std::fs::remove_file("/tmp/key_value_store_server_fetch.door").unwrap();
+    fetch
+        .install("/tmp/key_value_store_server_fetch.door")
+        .unwrap();
 
     std::thread::sleep(std::time::Duration::from_secs(5));
 }

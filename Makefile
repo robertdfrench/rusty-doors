@@ -40,7 +40,7 @@ launch: ##: Generate launch script for the example servers
 		| cut -f1 -d'.' \
 		| xargs -n1 -Iy echo 'cargo run --example y &'
 
-test: ##: Run tests against the example servers
+test: build ##: Run tests against the example servers
 	@$(banner)
 	true \
 		&& eval `make launch` \

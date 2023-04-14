@@ -5,17 +5,13 @@
 use crate::illumos;
 use crate::illumos::door_h::door_desc_t;
 use crate::illumos::door_h::door_return;
-use crate::illumos::door_h::door_server_procedure_t;
 use crate::illumos::fattach;
 use libc;
 use std::ffi;
 use std::fs::File;
 use std::io;
-use std::os::fd::AsRawFd;
-use std::os::fd::IntoRawFd;
 use std::os::fd::RawFd;
 use std::path::Path;
-use std::path::PathBuf;
 
 /// Door problems.
 ///
@@ -33,14 +29,33 @@ pub enum Error {
     CreateDoor(illumos::Error),
 }
 
-pub struct Server {
-    pub jamb_path: PathBuf,
-    pub door_descriptor: libc::c_int,
+pub struct Server(RawFd);
+
+impl Server {
+    pub fn install<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+        // Create jamb
+        let _jamb = match create_new_file(&path) {
+            Ok(file) => file,
+            Err(e) => return Err(Error::InstallJamb(e)),
+        };
+
+        // Attach door to jamb
+        match fattach(self.0, &path) {
+            Err(e) => {
+                // Clean up the jamb, since we aren't going to finish
+                std::fs::remove_file(&path).ok();
+                Err(Error::AttachDoor(e))
+            }
+            Ok(()) => Ok(()),
+        }
+    }
 }
 
-impl IntoRawFd for Server {
-    fn into_raw_fd(self) -> RawFd {
-        self.door_descriptor.as_raw_fd()
+impl Drop for Server {
+    fn drop(&mut self) {
+        unsafe {
+            illumos::door_h::door_revoke(self.0);
+        }
     }
 }
 
@@ -137,26 +152,34 @@ pub trait ServerProcedure<C: AsRef<[u8]>> {
         }
     }
 
-    /// Make this procedure available on the filesystem (as a door).
-    fn install<P: AsRef<Path>>(
+    fn create_server_with_cookie_and_attributes(
         cookie: u64,
-        path: P,
         attrs: illumos::DoorAttributes,
     ) -> Result<Server, Error> {
-        install_server_procedure(Self::c_wrapper, cookie, path, attrs)
+        match illumos::door_create(Self::c_wrapper, cookie, attrs) {
+            Ok(fd) => Ok(Server(fd as RawFd)),
+            Err(e) => Err(Error::CreateDoor(e)),
+        }
     }
 
-    fn force_install<P: AsRef<Path>>(
-        cookie: u64,
-        path: P,
+    fn create_server_with_cookie(cookie: u64) -> Result<Server, Error> {
+        Self::create_server_with_cookie_and_attributes(
+            cookie,
+            illumos::DoorAttributes::none(),
+        )
+    }
+
+    fn create_server_with_attributes(
         attrs: illumos::DoorAttributes,
     ) -> Result<Server, Error> {
-        if path.as_ref().exists() {
-            if let Err(e) = std::fs::remove_file(&path) {
-                return Err(Error::InstallJamb(e));
-            }
-        }
-        install_server_procedure(Self::c_wrapper, cookie, path, attrs)
+        Self::create_server_with_cookie_and_attributes(0, attrs)
+    }
+
+    fn create_server() -> Result<Server, Error> {
+        Self::create_server_with_cookie_and_attributes(
+            0,
+            illumos::DoorAttributes::none(),
+        )
     }
 }
 
@@ -166,40 +189,6 @@ fn create_new_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
         .write(true)
         .create_new(true)
         .open(path)
-}
-
-fn install_server_procedure<P: AsRef<Path>>(
-    server_procedure: door_server_procedure_t,
-    cookie: u64,
-    path: P,
-    attrs: illumos::DoorAttributes,
-) -> Result<Server, Error> {
-    // Create door
-    let door_descriptor =
-        match illumos::door_create(server_procedure, cookie, attrs) {
-            Ok(fd) => fd,
-            Err(e) => return Err(Error::CreateDoor(e)),
-        };
-
-    // Create jamb
-    let _jamb = match create_new_file(&path) {
-        Ok(file) => file,
-        Err(e) => return Err(Error::InstallJamb(e)),
-    };
-
-    // Attach door to jamb
-    match fattach(door_descriptor, &path) {
-        Err(e) => {
-            // Clean up the door and jamb, since we aren't going to finish
-            unsafe { libc::close(door_descriptor) };
-            std::fs::remove_file(&path).ok();
-            Err(Error::AttachDoor(e))
-        }
-        Ok(()) => Ok(Server {
-            jamb_path: path.as_ref().to_path_buf(),
-            door_descriptor,
-        }),
-    }
 }
 
 #[cfg(test)]

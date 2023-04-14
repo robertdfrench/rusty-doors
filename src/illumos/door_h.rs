@@ -117,6 +117,8 @@ extern "C" {
         desc_ptr: *const door_desc_t,
         num_desc: libc::c_uint,
     ) -> !;
+
+    pub fn door_revoke(d: libc::c_int) -> libc::c_int;
 }
 
 /// Arguments for, and Return Values from, a Door invocation.
