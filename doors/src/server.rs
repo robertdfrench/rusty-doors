@@ -32,9 +32,9 @@ pub enum Error {
 /// When a door is created, the kernel hands us back a reference to it by giving
 /// us an index in our descriptor table. This is true even if the door hasn't
 /// been attached to the filesystem yet, a la pipes or sockets.
-pub struct Server(RawFd);
+pub struct Door(RawFd);
 
-impl Server {
+impl Door {
     /// Make this door server available on the filesystem.
     ///
     /// This is necessary if we want other processes to be able to find and call
@@ -58,7 +58,7 @@ impl Server {
     }
 }
 
-impl Drop for Server {
+impl Drop for Door {
     fn drop(&mut self) {
         unsafe {
             illumos::door_h::door_revoke(self.0);
@@ -179,14 +179,14 @@ pub trait ServerProcedure<C: AsRef<[u8]>> {
     fn create_server_with_cookie_and_attributes(
         cookie: u64,
         attrs: illumos::DoorAttributes,
-    ) -> Result<Server, Error> {
+    ) -> Result<Door, Error> {
         match illumos::door_create(Self::c_wrapper, cookie, attrs) {
-            Ok(fd) => Ok(Server(fd as RawFd)),
+            Ok(fd) => Ok(Door(fd as RawFd)),
             Err(e) => Err(Error::CreateDoor(e)),
         }
     }
 
-    fn create_server_with_cookie(cookie: u64) -> Result<Server, Error> {
+    fn create_server_with_cookie(cookie: u64) -> Result<Door, Error> {
         Self::create_server_with_cookie_and_attributes(
             cookie,
             illumos::DoorAttributes::none(),
@@ -195,11 +195,11 @@ pub trait ServerProcedure<C: AsRef<[u8]>> {
 
     fn create_server_with_attributes(
         attrs: illumos::DoorAttributes,
-    ) -> Result<Server, Error> {
+    ) -> Result<Door, Error> {
         Self::create_server_with_cookie_and_attributes(0, attrs)
     }
 
-    fn create_server() -> Result<Server, Error> {
+    fn create_server() -> Result<Door, Error> {
         Self::create_server_with_cookie_and_attributes(
             0,
             illumos::DoorAttributes::none(),

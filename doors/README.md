@@ -5,6 +5,18 @@ The goal of this crate is to expose the [illumos][1] [Doors API][2] in
 Rust. It exposes the native doors API verbatim, and also provides some
 moderately safer abstractions.
 
+## What are Doors?
+A *door* is a file-like mechanism for interprocess communication, not
+unlike a named pipe or a UNIX Domain Socket. Client programs can invoke
+functions (called *server procedures*) in door servers if the door
+server has made a door available on the filesystem.
+
+A *server procedure* is a function within the door server program that
+has a special, predefined signature. It is the entrypoint for the thread
+that is created (or awoken) to handle a client's door invocation.
+
+A *door server* is a process that has created a *door* from one of its
+*server procedures*.
 
 ## Acknowledgements
 * The social media preview image is due to [Jim Choate][4] under the
