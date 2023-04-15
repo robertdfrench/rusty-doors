@@ -40,6 +40,11 @@ launch: ##: Generate launch script for the example servers
 		| cut -f1 -d'.' \
 		| xargs -n1 -Iy echo 'cargo run --example y &'
 
+publish: ##: Publish all crates in this workspace to crates.io
+	@$(banner)
+	cargo publish --package door-macros
+	cargo publish --package doors
+
 test: build ##: Run tests against the example servers
 	@$(banner)
 	true \
