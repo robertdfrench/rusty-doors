@@ -2,7 +2,6 @@
 
 use crate::illumos;
 use crate::illumos::door_h::door_desc_t;
-use crate::illumos::door_h::door_return;
 use crate::illumos::fattach;
 use crate::illumos::DoorAttributes;
 use libc;
@@ -136,7 +135,7 @@ pub struct Request<'a> {
 /// Server-Side representation of the client's door results
 ///
 /// This type can refer to either memory on the stack (which will be cleaned up
-/// automatically when [`door_return`] is called) or memory on the heap (which
+/// automatically when door_return is called) or memory on the heap (which
 /// will not). If you return an object that refers to memory on the heap, it is
 /// your responsibility to free it later.
 ///
@@ -188,81 +187,6 @@ impl<C: AsRef<[u8]>> Response<C> {
     }
 }
 
-pub trait ServerProcedure<C: AsRef<[u8]>> {
-    fn server_procedure(payload: Request<'_>) -> Response<C>;
-
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    extern "C" fn c_wrapper(
-        cookie: *const libc::c_void,
-        argp: *const libc::c_char,
-        arg_size: libc::size_t,
-        dp: *const door_desc_t,
-        n_desc: libc::c_uint,
-    ) {
-        let data = unsafe {
-            std::slice::from_raw_parts::<u8>(argp as *const u8, arg_size)
-        };
-        let descriptors = unsafe {
-            std::slice::from_raw_parts(dp, n_desc.try_into().unwrap())
-        };
-        let cookie = cookie as u64;
-        let payload = Request {
-            cookie,
-            data,
-            descriptors,
-        };
-        let response = Self::server_procedure(payload);
-        match response.data {
-            Some(data) => unsafe {
-                door_return(
-                    data.as_ref().as_ptr() as *const libc::c_char,
-                    data.as_ref().len(),
-                    response.descriptors.as_ptr(),
-                    response.num_descriptors,
-                )
-            },
-            None => unsafe {
-                door_return(
-                    std::ptr::null() as *const libc::c_char,
-                    0,
-                    response.descriptors.as_ptr(),
-                    response.num_descriptors,
-                )
-            },
-        }
-    }
-
-    fn create_server_with_cookie_and_attributes(
-        cookie: u64,
-        attrs: illumos::DoorAttributes,
-    ) -> Result<Door, Error> {
-        match illumos::door_create(Self::c_wrapper, cookie, attrs) {
-            Ok(fd) => Ok(Door(fd as RawFd)),
-            Err(e) => Err(Error::CreateDoor(e)),
-        }
-    }
-
-    fn create_server_with_cookie(cookie: u64) -> Result<Door, Error> {
-        Self::create_server_with_cookie_and_attributes(
-            cookie,
-            illumos::DoorAttributes::none(),
-        )
-    }
-
-    fn create_server_with_attributes(
-        attrs: illumos::DoorAttributes,
-    ) -> Result<Door, Error> {
-        Self::create_server_with_cookie_and_attributes(0, attrs)
-    }
-
-    fn create_server() -> Result<Door, Error> {
-        Self::create_server_with_cookie_and_attributes(
-            0,
-            illumos::DoorAttributes::none(),
-        )
-    }
-}
-
 fn create_new_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
     File::options()
         .read(true)
@@ -276,13 +200,7 @@ mod tests {
     use super::*;
     use crate::door_h;
     use crate::illumos::errno_h;
-    use std::ffi::CString;
-    use std::io::Read;
-    use std::io::Write;
     use std::os::fd::AsRawFd;
-    use std::os::fd::FromRawFd;
-    use std::path::Path;
-    use std::ptr;
 
     #[test]
     fn new_door_arg() {
@@ -302,87 +220,6 @@ mod tests {
         let response = unsafe { std::ffi::CStr::from_ptr(args.data_ptr) };
         let response = response.to_str().unwrap();
         assert_eq!(response, "HELLO, WORLD!");
-    }
-
-    #[test]
-    fn fancy_capitalize() {
-        let text = b"Hello, World!";
-        let mut buffer = [0; 1024];
-        let args = door_h::door_arg_t::new(text, &vec![], &mut buffer);
-        let door = std::fs::File::open("/tmp/fancy_capitalize.door").unwrap();
-        let door = door.as_raw_fd();
-
-        let rc = unsafe { door_h::door_call(door, &args) };
-        if rc == -1 {
-            assert_ne!(errno_h::errno(), libc::EBADF);
-        }
-        assert_eq!(rc, 0);
-        assert_eq!(args.data_size, 13);
-        let response = unsafe { std::ffi::CStr::from_ptr(args.data_ptr) };
-        let response = response.to_str().unwrap();
-        assert_eq!(response, "HELLO, WORLD!");
-    }
-
-    #[test]
-    fn fancy_receive_file_descriptor() {
-        let door_path = Path::new("/tmp/fancy_open_server.door");
-        let door_path_cstring =
-            CString::new(door_path.to_str().unwrap()).unwrap();
-
-        let txt_path = Path::new("/tmp/fancy_open_server.txt");
-        let mut txt = std::fs::File::create(txt_path).expect("create txt");
-        writeln!(txt, "Hello, World!").expect("write txt");
-        drop(txt);
-        let txt_path_cstring =
-            CString::new(txt_path.to_str().unwrap()).unwrap();
-
-        // Connect to the Capitalization Server through its door.
-        let client_door_fd =
-            unsafe { libc::open(door_path_cstring.as_ptr(), libc::O_RDONLY) };
-
-        // Pass `original` through the Capitalization Server's door.
-        let data_ptr = txt_path_cstring.as_ptr();
-        let data_size = 26;
-        let desc_ptr = ptr::null();
-        let desc_num = 0;
-        let rbuf = unsafe { libc::malloc(data_size) as *mut libc::c_char };
-        let rsize = data_size;
-
-        let params = door_h::door_arg_t {
-            data_ptr,
-            data_size,
-            desc_ptr,
-            desc_num,
-            rbuf,
-            rsize,
-        };
-
-        // This is where the magic happens. We block here while control is
-        // transferred to a separate thread which executes
-        // `capitalize_string` on our behalf.
-        unsafe { door_h::door_call(client_door_fd, &params) };
-
-        // Unpack the returned bytes and compare!
-        let door_desc_ts = unsafe {
-            std::slice::from_raw_parts::<door_h::door_desc_t>(
-                params.desc_ptr,
-                params.desc_num.try_into().unwrap(),
-            )
-        };
-        assert_eq!(door_desc_ts.len(), 1);
-
-        let d_data = &door_desc_ts[0].d_data;
-        let d_desc = unsafe { d_data.d_desc };
-        let raw_fd = d_desc.d_descriptor as RawFd;
-        let mut txt = unsafe { std::fs::File::from_raw_fd(raw_fd) };
-        let mut buffer = String::new();
-        txt.read_to_string(&mut buffer).expect("read txt");
-        assert_eq!(&buffer, "Hello, World!\n");
-
-        // We did a naughty and called malloc, so we need to clean up. A PR
-        // for a Rustier way to do this would be considered a personal
-        // favor.
-        unsafe { libc::free(rbuf as *mut libc::c_void) };
     }
 
     #[test]

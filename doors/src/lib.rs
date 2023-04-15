@@ -144,24 +144,6 @@ mod tests {
     }
 
     #[test]
-    fn increment_shared_counter() {
-        let increment =
-            client::Client::open("/tmp/key_value_store_server.door").unwrap();
-        let fetch =
-            client::Client::open("/tmp/key_value_store_server_fetch.door")
-                .unwrap();
-
-        let mut rbuf: [u8; 1] = [0];
-
-        let mut arg = crate::door_h::door_arg_t::new(&[], &[], &mut rbuf);
-        increment.call(&mut arg).unwrap();
-        increment.call(&mut arg).unwrap();
-        increment.call(&mut arg).unwrap();
-        fetch.call(&mut arg).unwrap();
-        assert_eq!(rbuf[0], 3);
-    }
-
-    #[test]
     fn procedural_macro_double_u8() {
         let double = client::Client::open("/tmp/procmac_double.door").unwrap();
 
