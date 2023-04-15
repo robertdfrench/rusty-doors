@@ -4,6 +4,7 @@ use crate::illumos;
 use crate::illumos::door_h::door_desc_t;
 use crate::illumos::door_h::door_return;
 use crate::illumos::fattach;
+use crate::illumos::DoorAttributes;
 use libc;
 use std::ffi;
 use std::fs::File;
@@ -35,10 +36,54 @@ pub enum Error {
 pub struct Door(RawFd);
 
 impl Door {
-    /// Make this door server available on the filesystem.
-    ///
-    /// This is necessary if we want other processes to be able to find and call
-    /// this door server.
+    /// Create a new Door with the specified server procedure.  This will not
+    /// expose the door to the filesystem by default. It will assume that you
+    /// are not using a door cookie, and that you do not need to set any
+    /// [`DoorAttributes`].
+    pub fn create(sp: illumos::RawServerProcedure) -> Result<Self, Error> {
+        let cookie = 0;
+        let attrs = DoorAttributes::none();
+        Self::create_with_cookie_and_attributes(sp, cookie, attrs)
+    }
+
+    /// Create a new Door with a Cookie.  This will not expose the door to the
+    /// filesystem by default. It will use the door cookie that you provide, but
+    /// will assume that you do not need to set any [`DoorAttributes`].
+    pub fn create_with_cookie(
+        sp: illumos::RawServerProcedure,
+        cookie: u64,
+    ) -> Result<Self, Error> {
+        let attrs = DoorAttributes::none();
+        Self::create_with_cookie_and_attributes(sp, cookie, attrs)
+    }
+
+    /// Create a new Door with Attributes.  This will not expose the door to the
+    /// filesystem by default. It will use the [`DoorAttributes`] that you
+    /// provide, but will assume that you are not using a door cookie.
+    pub fn create_with_attributes(
+        sp: illumos::RawServerProcedure,
+        attrs: DoorAttributes,
+    ) -> Result<Self, Error> {
+        let cookie = 0;
+        Self::create_with_cookie_and_attributes(sp, cookie, attrs)
+    }
+
+    /// Create a new Door with Cookie and Attributes.  This will not expose the
+    /// door to the filesystem by default. It will use the [`DoorAttributes`]
+    /// and cookie that you provide.
+    pub fn create_with_cookie_and_attributes(
+        sp: illumos::RawServerProcedure,
+        cookie: u64,
+        attrs: illumos::DoorAttributes,
+    ) -> Result<Self, Error> {
+        match illumos::door_create(sp, cookie, attrs) {
+            Ok(fd) => Ok(Self(fd as RawFd)),
+            Err(e) => Err(Error::CreateDoor(e)),
+        }
+    }
+
+    /// Make this door server available on the filesystem.  This is necessary if
+    /// we want other processes to be able to find and call this door server.
     pub fn install<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
         // Create jamb
         let _jamb = match create_new_file(&path) {
@@ -55,6 +100,17 @@ impl Door {
             }
             Ok(()) => Ok(()),
         }
+    }
+
+    /// Make this door available on the filesystem even if there is already a
+    /// file (possibly leftover from a previous door) as this path.
+    pub fn force_install<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+        if path.as_ref().exists() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                return Err(Error::InstallJamb(e));
+            }
+        }
+        self.install(path)
     }
 }
 

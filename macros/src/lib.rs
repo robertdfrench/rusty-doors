@@ -48,7 +48,7 @@ pub fn server_procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // extract the single argument and it's type
     let arg = &input.sig.inputs[0];
-    let (arg_ident, _arg_type) = match arg {
+    let (arg_ident, arg_type) = match arg {
         FnArg::Receiver(_) => {
             return Error::new(
                 arg.span(),
@@ -96,7 +96,7 @@ pub fn server_procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
          ) {
 
             let f = || -> #return_type {
-                let #arg_ident = doors::server::Request {
+                let #arg_ident: #arg_type = doors::server::Request {
                     data: unsafe {
                         std::slice::from_raw_parts::<u8>(
                             argp as *const u8,

@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "door-macros"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "doors",
  "quote",
@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "doors"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "door-macros",
  "libc",
