@@ -2,6 +2,11 @@
 name = "door-macros"
 version = "0.1.0"
 edition = "2021"
+authors = ["Robert D. French <robert@robertdfrench.me>"]
+description = "Macros for the 'doors' crate"
+license = "MPL-2.0"
+repository = "https://github.com/robertdfrench/rusty-doors"
+documentation = "https://docs.rs/doors"
 
 [lib]
 proc-macro = true
