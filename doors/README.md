@@ -1,14 +1,9 @@
 # Rusty Doors
-![](etc/social_media_preview.jpg)
+![](https://github.com/robertdfrench/rusty-doors/raw/HEAD/doors/etc/social_media_preview.jpg)
 
 The goal of this crate is to expose the [illumos][1] [Doors API][2] in
 Rust. It exposes the native doors API verbatim, and also provides some
 moderately safer abstractions.
-
-
-## Tests
-Run `make tests` to run the unit tests, and run `make cicd` to run the
-full build pipeline.
 
 
 ## Acknowledgements
