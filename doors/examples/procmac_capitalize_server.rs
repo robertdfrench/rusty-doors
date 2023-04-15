@@ -4,14 +4,15 @@
 
 use doors::illumos::door_h;
 use doors::illumos::stropts_h;
+use doors::server;
 use std::ffi::CString;
 use std::fs;
 use std::path::Path;
 use std::ptr;
 
 #[doors::server_procedure]
-fn double(payload: u8) -> u8 {
-    payload * 2
+fn double(payload: server::Request<'_>) -> server::Response<[u8; 1]> {
+    server::Response::new([payload.data[0] * 2])
 }
 
 fn main() {

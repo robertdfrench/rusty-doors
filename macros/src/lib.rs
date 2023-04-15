@@ -1,4 +1,4 @@
-//! This module contains a single macro [`macro@server_procedure`] for transforming a rust
+//! This crate contains a single macro [`macro@server_procedure`] for transforming a rust
 //! function into a server procedure.
 
 use proc_macro::TokenStream;
@@ -6,15 +6,16 @@ use quote::{format_ident, quote, ToTokens};
 use syn::spanned::Spanned;
 use syn::{parse_macro_input, Error, FnArg, ItemFn, Pat, ReturnType};
 
-/// This macro transforms function into a door call handler. See `rusty_doors`
-/// module documentation for usage.
+/// This macro transforms function into a door call handler. See `doors` crate
+/// documentation for usage.
 ///
 /// Only single argument functions are supported e.g.
 /// ```
-/// struct MyResult {}
+/// use doors::server::Request;
+/// use doors::server::Response;
 ///
 /// #[door_macros::server_procedure]
-/// fn serv_proc(x: &[u8]) -> MyResult {
+/// fn serv_proc(x: Request<'_>) -> Response<[u8; 1]> {
 ///     todo!();
 /// }
 /// ```
@@ -30,7 +31,7 @@ pub fn server_procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
     if input.sig.inputs.len() != 1 {
         return Error::new(
             input.sig.inputs.span(),
-            "only single argument doors supported",
+            "doors should take a single Request as input",
         )
         .to_compile_error()
         .into();
@@ -38,7 +39,7 @@ pub fn server_procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // extract the single argument and it's type
     let arg = &input.sig.inputs[0];
-    let (arg_ident, arg_type) = match arg {
+    let (arg_ident, _arg_type) = match arg {
         FnArg::Receiver(_) => {
             return Error::new(
                 arg.span(),
@@ -78,25 +79,51 @@ pub fn server_procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let q = quote! {
 
         extern "C" fn #name(
-            _cookie: *const std::os::raw::c_void,
-            dataptr: *const std::os::raw::c_char,
-            _datasize: usize,
-            _descptr: *const doors::illumos::door_h::door_desc_t,
-            _ndesc: std::os::raw::c_uint,
+            cookie: *const std::os::raw::c_void,
+            argp: *const std::os::raw::c_char,
+            arg_size: usize,
+            dp: *const doors::illumos::door_h::door_desc_t,
+            n_desc: std::os::raw::c_uint,
          ) {
 
             let f = || -> #return_type {
-                let #arg_ident = unsafe { *(dataptr as *mut #arg_type) };
+                let #arg_ident = doors::server::Request {
+                    data: unsafe {
+                        std::slice::from_raw_parts::<u8>(
+                            argp as *const u8,
+                            arg_size
+                        )
+                    },
+                    descriptors: unsafe {
+                        std::slice::from_raw_parts(
+                            dp,
+                            n_desc.try_into().unwrap()
+                        )
+                    },
+                    cookie: cookie as u64
+                };
                 #blk
             };
 
-            let mut result = f();
-            unsafe { doors::illumos::door_h::door_return(
-                (&mut result as *mut #return_type) as *mut std::os::raw::c_char,
-                std::mem::size_of::<#return_type>(),
-                std::ptr::null_mut(),
-                0,
-            ) };
+            let mut response = f();
+            match response.data {
+                Some(data) => unsafe {
+                    doors::illumos::door_h::door_return(
+                        data.as_ref().as_ptr() as *const std::os::raw::c_char,
+                        data.as_ref().len(),
+                        response.descriptors.as_ptr(),
+                        response.num_descriptors,
+                    )
+                },
+                None => unsafe {
+                    doors::illumos::door_h::door_return(
+                        std::ptr::null() as *const std::os::raw::c_char,
+                        0,
+                        response.descriptors.as_ptr(),
+                        response.num_descriptors,
+                    )
+                }
+            }
 
         }
 

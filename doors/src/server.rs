@@ -70,6 +70,7 @@ impl Drop for Server {
 ///
 /// This type allows us to write server procedures that accept a single argument
 /// rather than five separate arguments.
+#[derive(Copy, Clone)]
 pub struct Request<'a> {
     pub cookie: u64,
     pub data: &'a [u8],

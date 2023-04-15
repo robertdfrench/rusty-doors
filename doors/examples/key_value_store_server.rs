@@ -29,8 +29,6 @@ impl ServerProcedure<[u8; 1]> for Fetch {
     ) -> server::Response<[u8; 1]> {
         let x = unsafe { COUNT.load(Ordering::SeqCst) };
 
-        println!("COUNT: {}", x);
-
         server::Response::new([x])
     }
 }
