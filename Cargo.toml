@@ -1,12 +1,6 @@
-[package]
-name = "doors"
-version = "0.4.2"
-edition = "2021"
-authors = ["Robert D. French <robert@robertdfrench.me>"]
-description = "Access the illumos Doors API from Rust"
-license = "MPL-2.0"
-repository = "https://github.com/robertdfrench/rusty-doors"
-documentation = "https://crates.io/doors"
+[workspace]
 
-[dependencies]
-libc = "0.2"
+members = [
+	"doors",
+	"macros",
+]

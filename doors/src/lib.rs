@@ -13,6 +13,8 @@
 //! [1]: https://github.com/robertdfrench/revolving-doors
 //! [2]: https://illumos.org/man/3C/door_create
 //! [3]: https://illumos.org
+pub use door_macros::server_procedure;
+
 pub mod client;
 pub mod illumos;
 pub mod server;
@@ -151,5 +153,16 @@ mod tests {
         increment.call(&mut arg).unwrap();
         fetch.call(&mut arg).unwrap();
         assert_eq!(rbuf[0], 3);
+    }
+
+    #[test]
+    fn procedural_macro_double_u8() {
+        let double = client::Client::open("/tmp/procmac_double.door").unwrap();
+
+        let mut rbuf: [u8; 1] = [0];
+
+        let mut arg = crate::door_h::door_arg_t::new(&[111], &[], &mut rbuf);
+        double.call(&mut arg).unwrap();
+        assert_eq!(rbuf[0], 222);
     }
 }
