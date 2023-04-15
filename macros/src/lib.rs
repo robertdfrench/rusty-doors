@@ -21,7 +21,7 @@ use syn::{parse_macro_input, Error, FnArg, ItemFn, Pat, ReturnType};
 /// use doors::server::Request;
 /// use doors::server::Response;
 ///
-/// #[door_macros::server_procedure]
+/// #[doors::server_procedure]
 /// fn serv_proc(x: Request<'_>) -> Response<[u8; 1]> {
 ///     todo!();
 /// }
