@@ -13,10 +13,12 @@ use quote::{format_ident, quote, ToTokens};
 use syn::spanned::Spanned;
 use syn::{parse_macro_input, Error, FnArg, ItemFn, Pat, ReturnType};
 
-/// This macro transforms function into a door call handler. See `doors` crate
-/// documentation for usage.
+/// This macro transforms a Rust function into a Doors-compatible server
+/// procedure.
 ///
-/// Only single argument functions are supported e.g.
+/// This makes it easier to write functions which accept and return
+/// Rust-friendlier types.
+///
 /// ```
 /// use doors::server::Request;
 /// use doors::server::Response;
