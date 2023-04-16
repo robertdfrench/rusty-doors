@@ -129,7 +129,8 @@ mod tests {
         let text = b"Hello, World!";
         let mut buffer = [0; 1024];
         let args = door_h::door_arg_t::new(text, &vec![], &mut buffer);
-        let door = std::fs::File::open("/tmp/barebones_server.door").unwrap();
+        let door =
+            std::fs::File::open("/tmp/barebones_capitalize.door").unwrap();
         let door = door.as_raw_fd();
 
         let rc = unsafe { door_h::door_call(door, &args) };

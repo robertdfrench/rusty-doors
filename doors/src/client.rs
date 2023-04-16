@@ -143,7 +143,8 @@ mod tests {
         let text = b"Hello, World!";
         let mut buffer = [0; 1024];
         let mut args = door_arg_t::new(text, &vec![], &mut buffer);
-        let file = std::fs::File::open("/tmp/barebones_server.door").unwrap();
+        let file =
+            std::fs::File::open("/tmp/barebones_capitalize.door").unwrap();
         let door = unsafe { Client::from_raw_fd(file.as_raw_fd()) };
 
         door.call(&mut args).unwrap();
@@ -158,7 +159,7 @@ mod tests {
         let text = b"Hello, World!";
         let mut buffer = [0; 1024];
         let mut args = door_arg_t::new(text, &vec![], &mut buffer);
-        let door = Client::open("/tmp/barebones_server.door").unwrap();
+        let door = Client::open("/tmp/barebones_capitalize.door").unwrap();
 
         door.call(&mut args).unwrap();
         assert_eq!(args.data_size, 13);
@@ -172,7 +173,8 @@ mod tests {
         let text = b"Hello, World!";
         let mut buffer = [0; 1024];
         let mut args = door_arg_t::new(text, &vec![], &mut buffer);
-        let file = std::fs::File::open("/tmp/barebones_server.door").unwrap();
+        let file =
+            std::fs::File::open("/tmp/barebones_capitalize.door").unwrap();
         let fd = file.as_raw_fd();
         let door = unsafe { Client::from_raw_fd(file.into_raw_fd()) };
 

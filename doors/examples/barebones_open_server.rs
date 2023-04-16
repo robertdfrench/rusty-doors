@@ -1,7 +1,15 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright 2023 Robert D. French
+
 //! A Barebones server using only the illumos headers, and no additional
 //! support. This helps validate that the headers are expressed correctly in
 //! Rust.
-
+//!
+//! The corresponding door client tests are located at
+//! /doors/tests/barebones_open_tests.rs in this repo.
 use doors::illumos::door_h;
 use doors::illumos::stropts_h;
 use libc;
@@ -26,7 +34,7 @@ extern "C" fn open_file(
 }
 
 fn main() {
-    let door_path = Path::new("/tmp/barebones_open_server.door");
+    let door_path = Path::new("/tmp/barebones_open.door");
     if door_path.exists() {
         fs::remove_file(door_path).unwrap();
     }

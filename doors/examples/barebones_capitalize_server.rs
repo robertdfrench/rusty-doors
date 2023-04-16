@@ -35,7 +35,7 @@ extern "C" fn capitalize_string(
 }
 
 fn main() {
-    let door_path = Path::new("/tmp/barebones_server.door");
+    let door_path = Path::new("/tmp/barebones_capitalize.door");
     if door_path.exists() {
         fs::remove_file(door_path).unwrap();
     }
