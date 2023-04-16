@@ -101,7 +101,7 @@ pub fn fattach<P: AsRef<Path>>(fildes: RawFd, path: P) -> Result<(), Error> {
 /// or a macro, but it is not a function to which a trait or a macro is applied.
 ///
 /// [`DOOR_CREATE(3C)`]: https://illumos.org/man/3C/door_create
-pub type RawServerProcedure = door_h::door_server_procedure_t;
+pub type ServerProcedure = door_h::door_server_procedure_t;
 
 /// Change a door's behavior
 #[derive(Debug, PartialEq)]
@@ -171,7 +171,7 @@ impl BitOrAssign for DoorAttributes {
 ///
 /// [`DOOR_CREATE(3C)`]: https://illumos.org/man/3C/door_create
 pub fn door_create(
-    server_procedure: RawServerProcedure,
+    server_procedure: ServerProcedure,
     cookie: u64,
     attributes: DoorAttributes,
 ) -> Result<RawFd, Error> {

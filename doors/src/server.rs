@@ -39,7 +39,7 @@ impl Door {
     /// expose the door to the filesystem by default. It will assume that you
     /// are not using a door cookie, and that you do not need to set any
     /// [`DoorAttributes`].
-    pub fn create(sp: illumos::RawServerProcedure) -> Result<Self, Error> {
+    pub fn create(sp: illumos::ServerProcedure) -> Result<Self, Error> {
         let cookie = 0;
         let attrs = DoorAttributes::none();
         Self::create_with_cookie_and_attributes(sp, cookie, attrs)
@@ -49,7 +49,7 @@ impl Door {
     /// filesystem by default. It will use the door cookie that you provide, but
     /// will assume that you do not need to set any [`DoorAttributes`].
     pub fn create_with_cookie(
-        sp: illumos::RawServerProcedure,
+        sp: illumos::ServerProcedure,
         cookie: u64,
     ) -> Result<Self, Error> {
         let attrs = DoorAttributes::none();
@@ -60,7 +60,7 @@ impl Door {
     /// filesystem by default. It will use the [`DoorAttributes`] that you
     /// provide, but will assume that you are not using a door cookie.
     pub fn create_with_attributes(
-        sp: illumos::RawServerProcedure,
+        sp: illumos::ServerProcedure,
         attrs: DoorAttributes,
     ) -> Result<Self, Error> {
         let cookie = 0;
@@ -71,7 +71,7 @@ impl Door {
     /// door to the filesystem by default. It will use the [`DoorAttributes`]
     /// and cookie that you provide.
     pub fn create_with_cookie_and_attributes(
-        sp: illumos::RawServerProcedure,
+        sp: illumos::ServerProcedure,
         cookie: u64,
         attrs: illumos::DoorAttributes,
     ) -> Result<Self, Error> {
