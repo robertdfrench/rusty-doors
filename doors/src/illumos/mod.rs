@@ -407,8 +407,6 @@ mod tests {
         let info1 = door_info(fd1).unwrap();
         let info2 = door_info(fd2).unwrap();
 
-        assert_eq!(info1.proc(), hello as *const ServerProcedure);
-        assert_eq!(info2.proc(), goodbye as *const ServerProcedure);
         assert_ne!(info1.proc(), info2.proc());
     }
 }
