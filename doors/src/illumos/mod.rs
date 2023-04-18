@@ -147,6 +147,42 @@ impl DoorAttributes {
         }
     }
 
+    pub fn no_depletion_callback() -> Self {
+        Self {
+            attrs: door_h::DOOR_NO_DEPLETION_CB,
+        }
+    }
+
+    pub fn local() -> Self {
+        Self {
+            attrs: door_h::DOOR_LOCAL,
+        }
+    }
+
+    pub fn revoked() -> Self {
+        Self {
+            attrs: door_h::DOOR_REVOKED,
+        }
+    }
+
+    pub fn is_unreferenced() -> Self {
+        Self {
+            attrs: door_h::DOOR_IS_UNREF,
+        }
+    }
+
+    pub fn privcreate() -> Self {
+        Self {
+            attrs: door_h::DOOR_PRIVCREATE,
+        }
+    }
+
+    pub fn depletion_callback() -> Self {
+        Self {
+            attrs: door_h::DOOR_DEPLETION_CB,
+        }
+    }
+
     pub fn get(&self) -> u32 {
         self.attrs
     }
@@ -195,7 +231,7 @@ pub fn door_create(
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
 pub struct DoorInfo(door_h::door_info_t);
 
 pub fn door_info(fd: RawFd) -> Result<DoorInfo, Error> {
@@ -207,6 +243,29 @@ pub fn door_info(fd: RawFd) -> Result<DoorInfo, Error> {
             libc::EBADF => Err(Error::EBADF),
             _ => unreachable!(),
         },
+    }
+}
+
+impl DoorInfo {
+    pub fn target(&self) -> u32 {
+        self.0.di_target as u32
+    }
+
+    pub fn proc(&self) -> *const ServerProcedure {
+        self.0.di_proc as *const ServerProcedure
+    }
+
+    pub fn cookie(&self) -> u64 {
+        self.0.di_data
+    }
+
+    pub fn attributes(&self) -> DoorAttributes {
+        let attrs = self.0.di_attributes;
+        DoorAttributes { attrs }
+    }
+
+    pub fn id(&self) -> u64 {
+        self.0.di_uniquifier
     }
 }
 
@@ -229,5 +288,127 @@ mod tests {
     fn door_info_error() {
         let e = door_info(-1);
         assert_eq!(e, Err(Error::EBADF));
+    }
+
+    #[test]
+    fn door_info_target() {
+        extern "C" fn hello(
+            _cookie: *const libc::c_void,
+            _argp: *const libc::c_char,
+            _arg_size: libc::size_t,
+            _dp: *const door_h::door_desc_t,
+            _n_desc: libc::c_uint,
+        ) {
+        }
+
+        let fd = door_create(hello, 0, DoorAttributes::none()).unwrap();
+        let info = door_info(fd).unwrap();
+        assert_eq!(info.target(), std::process::id());
+    }
+
+    #[test]
+    fn door_info_cookie() {
+        extern "C" fn hello(
+            _cookie: *const libc::c_void,
+            _argp: *const libc::c_char,
+            _arg_size: libc::size_t,
+            _dp: *const door_h::door_desc_t,
+            _n_desc: libc::c_uint,
+        ) {
+        }
+
+        let fd = door_create(hello, 7, DoorAttributes::none()).unwrap();
+        let info = door_info(fd).unwrap();
+        assert_eq!(info.cookie(), 7);
+    }
+
+    #[test]
+    fn door_info_attrs() {
+        extern "C" fn hello(
+            _cookie: *const libc::c_void,
+            _argp: *const libc::c_char,
+            _arg_size: libc::size_t,
+            _dp: *const door_h::door_desc_t,
+            _n_desc: libc::c_uint,
+        ) {
+        }
+
+        let fd = door_create(hello, 0, DoorAttributes::private()).unwrap();
+        let info = door_info(fd).unwrap();
+        assert_eq!(
+            info.attributes(),
+            DoorAttributes::local()
+                | DoorAttributes::is_unreferenced()
+                | DoorAttributes::private()
+        );
+    }
+
+    #[test]
+    fn door_info_id() {
+        extern "C" fn hello(
+            _cookie: *const libc::c_void,
+            _argp: *const libc::c_char,
+            _arg_size: libc::size_t,
+            _dp: *const door_h::door_desc_t,
+            _n_desc: libc::c_uint,
+        ) {
+        }
+
+        let fd1 = door_create(hello, 1, DoorAttributes::none()).unwrap();
+        let fd2 = door_create(hello, 2, DoorAttributes::none()).unwrap();
+
+        let info1 = door_info(fd1).unwrap();
+        let info2 = door_info(fd2).unwrap();
+
+        assert_ne!(info1.id(), info2.id());
+    }
+
+    #[test]
+    fn door_info_proc() {
+        extern "C" fn hello(
+            _cookie: *const libc::c_void,
+            _argp: *const libc::c_char,
+            _arg_size: libc::size_t,
+            _dp: *const door_h::door_desc_t,
+            _n_desc: libc::c_uint,
+        ) {
+        }
+
+        let fd = door_create(hello, 0, DoorAttributes::none()).unwrap();
+
+        let info = door_info(fd).unwrap();
+
+        assert_eq!(info.proc(), hello as *const ServerProcedure);
+    }
+
+    #[test]
+    fn door_info_different_procs_are_unequal() {
+        extern "C" fn hello(
+            _cookie: *const libc::c_void,
+            _argp: *const libc::c_char,
+            _arg_size: libc::size_t,
+            _dp: *const door_h::door_desc_t,
+            _n_desc: libc::c_uint,
+        ) {
+        }
+
+        extern "C" fn goodbye(
+            _cookie: *const libc::c_void,
+            _argp: *const libc::c_char,
+            _arg_size: libc::size_t,
+            _dp: *const door_h::door_desc_t,
+            _n_desc: libc::c_uint,
+        ) {
+        }
+
+        let fd1 = door_create(hello, 0, DoorAttributes::none()).unwrap();
+        let fd2 = door_create(goodbye, 0, DoorAttributes::none()).unwrap();
+
+        let info1 = door_info(fd1).unwrap();
+        let info2 = door_info(fd2).unwrap();
+
+        assert_eq!(info1.proc(), hello as *const ServerProcedure);
+        assert_eq!(info2.proc(), goodbye as *const ServerProcedure);
+        assert_ne!(info1.proc(), info2.proc());
     }
 }

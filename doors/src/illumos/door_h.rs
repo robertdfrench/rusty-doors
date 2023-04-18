@@ -8,7 +8,9 @@
 //! Unsafe Declarations for the illumos Doors API
 //!
 //! This module merely re-exports the subset of the illumos doors api that we
-//! need for this project. It makes no attempt at safety or ergonomics.
+//! need for this project. It makes no attempt at safety or ergonomics. Insofar
+//! as possible, all of the definitions provided here are verbatim Rust imports of the
+//! definitions provided in /usr/include/sys/door.h
 //!
 //! Check out [revolving-doors][1] for an introduction to doors.
 //!
@@ -187,17 +189,6 @@ pub struct door_desc_t {
 /// [`DOOR_CREATE(3C)`]: https://illumos.org/man/3c/door_create#DESCRIPTION
 pub type door_attr_t = libc::c_uint;
 
-/// Prohibit clients from sending file / socket / door descriptors
-///
-/// Specified in the "Description" section of [`DOOR_CREATE(3C)`]. This flag
-/// tells the illumos kernel that we do not want door clients (in this case, the
-/// `portunusd` server) to be able to forward their file, socket, or door
-/// descriptors to us. *This may change in a future version of the [DPA][1].*
-///
-/// [1]: https://github.com/robertdfrench/portunusd/blob/trunk/etc/DPA.md
-/// [`DOOR_CREATE(3C)`]: https://illumos.org/man/3c/door_create#DESCRIPTION
-pub const DOOR_REFUSE_DESC: door_attr_t = 0x40;
-
 /// Declare that a [`door_desc_t`] contains a file descriptor.
 ///
 /// Specified in the "Description" section of [`DOOR_CREATE(3C)`], this flag
@@ -215,17 +206,38 @@ pub const DOOR_DESCRIPTOR: door_attr_t = 0x10000; // A file descriptor is being 
 /// descriptor, then we need to release it here.
 pub const DOOR_RELEASE: door_attr_t = 0x40000; // Passed references are also released.
 
+/// Deliver an unref notification with door
+pub const DOOR_UNREF: door_attr_t = 0x01;
+
 /// Use a private pool of server threads
 pub const DOOR_PRIVATE: door_attr_t = 0x02;
+
+/// Deliver unref notification more than once
+pub const DOOR_UNREF_MULTI: door_attr_t = 0x10;
+
+/// Prohibit clients from sending file / socket / door descriptors
+pub const DOOR_REFUSE_DESC: door_attr_t = 0x40;
 
 /// No server thread cancel on client abort
 pub const DOOR_NO_CANCEL: door_attr_t = 0x80;
 
-/// Deliver an unref notification with door
-pub const DOOR_UNREF: door_attr_t = 0x01;
+/// No thread create callbacks on depletion
+pub const DOOR_NO_DEPLETION_CB: door_attr_t = 0x100;
 
-/// Deliver unref notification more than once
-pub const DOOR_UNREF_MULTI: door_attr_t = 0x10;
+/// Descriptor is local to current process
+pub const DOOR_LOCAL: door_attr_t = 0x04;
+
+/// Door has been revoked
+pub const DOOR_REVOKED: door_attr_t = 0x08;
+
+/// Door is currently unreferenced
+pub const DOOR_IS_UNREF: door_attr_t = 0x20;
+
+/// Door has a private thread creation func
+pub const DOOR_PRIVCREATE: door_attr_t = 0x200;
+
+/// Door has a private thread creation func
+pub const DOOR_DEPLETION_CB: door_attr_t = 0x400;
 
 /// `d_data` component of [`door_desc_t`]
 ///
