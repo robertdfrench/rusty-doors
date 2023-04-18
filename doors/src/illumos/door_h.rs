@@ -118,6 +118,18 @@ extern "C" {
         num_desc: libc::c_uint,
     ) -> !;
 
+    /// Return information associated with a door descriptor
+    ///
+    /// See [`DOOR_INFO(3C)`] for more information.
+    ///
+    /// [`DOOR_INFO(3C)`]: https://illumos.org/man/3c/door_info
+    pub fn door_info(d: libc::c_int, info: &mut door_info_t) -> libc::c_int;
+
+    /// Revoke access to a door descriptor
+    ///
+    /// See [`DOOR_REVOKE(3C)`] for more information.
+    ///
+    /// [`DOOR_REVOKE(3C)`]: https://illumos.org/man/3c/door_revoke
     pub fn door_revoke(d: libc::c_int) -> libc::c_int;
 }
 
@@ -250,3 +262,31 @@ pub struct door_desc_t__d_data__d_desc {
 /// really need to worry about it. Or at least, if I should be worried about it,
 /// I'm in a lot of trouble.
 pub type door_id_t = libc::c_ulonglong;
+
+/// Door Pointer Type
+///
+/// Used for cookies and door identifiers.
+pub type door_ptr_t = libc::c_ulonglong;
+
+/// Structure used to return info form door_info
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+#[repr(C, packed)]
+pub struct door_info_t {
+    /// Server process
+    pub di_target: libc::pid_t,
+
+    /// Server procedure
+    pub di_proc: door_ptr_t,
+
+    /// Data cookie
+    pub di_data: door_ptr_t,
+
+    /// Attributes associated with door
+    pub di_attributes: door_attr_t,
+
+    /// Unique number
+    pub di_uniquifier: door_id_t,
+
+    /// Future use
+    pub di_resv: [libc::c_int; 4],
+}

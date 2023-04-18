@@ -26,7 +26,7 @@ use std::path::Path;
 ///
 /// These are the values that `errno` can return, but presented as a
 /// Rust-friendly enumeration.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
     /// The user is the owner of path but does not have write
     /// permissions on path or fildes is locked.
@@ -65,6 +65,9 @@ pub enum Error {
     /// The effective user ID is not the owner of path or a
     /// user with the appropriate privileges.
     EPERM,
+
+    /// Bad address
+    EFAULT,
 }
 
 /// Attach a doors-based file descriptor to an object in the file system name
@@ -192,6 +195,21 @@ pub fn door_create(
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct DoorInfo(door_h::door_info_t);
+
+pub fn door_info(fd: RawFd) -> Result<DoorInfo, Error> {
+    let mut info: door_h::door_info_t = Default::default();
+    match unsafe { door_h::door_info(fd, &mut info) } {
+        0 => Ok(DoorInfo(info)),
+        _ => match errno_h::errno() {
+            libc::EFAULT => Err(Error::EFAULT),
+            libc::EBADF => Err(Error::EBADF),
+            _ => unreachable!(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +223,11 @@ mod tests {
         let badpath = CString::new("<(^_^)>").unwrap();
         assert_eq!(unsafe { libc::open(badpath.as_ptr(), libc::O_RDONLY) }, -1);
         assert_eq!(errno_h::errno(), libc::ENOENT);
+    }
+
+    #[test]
+    fn door_info_error() {
+        let e = door_info(-1);
+        assert_eq!(e, Err(Error::EBADF));
     }
 }
