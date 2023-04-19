@@ -5,7 +5,6 @@
  *
  * Copyright 2021 Robert D. French
  */
-
 //! illumos-specific APIs not (yet) found in the libc crate
 //!
 //! In this module, we represent only the subset of the illumos-specific APIs
@@ -106,17 +105,20 @@ pub fn fattach<P: AsRef<Path>>(fildes: RawFd, path: P) -> Result<(), Error> {
 /// [`DOOR_CREATE(3C)`]: https://illumos.org/man/3C/door_create
 pub type ServerProcedure = door_h::door_server_procedure_t;
 
-/// Change a door's behavior
+/// Flags that represent a door's behavior
 #[derive(Debug, PartialEq)]
 pub struct DoorAttributes {
     attrs: u32,
 }
 
 impl DoorAttributes {
+    /// Empty set of attributes
     pub fn none() -> Self {
         Self { attrs: 0 }
     }
 
+    /// Ask for the server procedure to receive a special shutdown invocation
+    /// when it is no longer being referenced by active clients.
     pub fn unref() -> Self {
         Self {
             attrs: door_h::DOOR_UNREF,
@@ -231,9 +233,15 @@ pub fn door_create(
     }
 }
 
+/// Door Metadata
+///
+/// Contains information about the door server, such as its pid, memory location
+/// of the server procedure, the cookie value, and any attributes. Any client
+/// able to obtain a valid file descriptor for a door can read this information.
 #[derive(Default, Clone, Copy, Debug, PartialEq)]
 pub struct DoorInfo(door_h::door_info_t);
 
+/// Lookup metadata for a door
 pub fn door_info(fd: RawFd) -> Result<DoorInfo, Error> {
     let mut info: door_h::door_info_t = Default::default();
     match unsafe { door_h::door_info(fd, &mut info) } {

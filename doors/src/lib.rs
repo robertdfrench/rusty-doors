@@ -10,6 +10,39 @@
 //! help you create clients, define server procedures, and open or create doors
 //! on the filesystem.
 //!
+//! ## Example
+//! ```
+//! // In the Server --------------------------------------- //
+//! use doors::server::Door;
+//! use doors::server::Request;
+//! use doors::server::Response;
+//!
+//! #[doors::server_procedure]
+//! fn double(x: Request<'_>) -> Response<[u8; 1]> {
+//!   if x.data.len() > 0 {
+//!     return Response::new([x.data[0] * 2]);
+//!   } else {
+//!     // We were given nothing, and 2 times nothing is zero...
+//!     return Response::new([0]);
+//!   }
+//! }
+//!
+//! let door = Door::create(double).unwrap();
+//! door.force_install("/tmp/double.door").unwrap();
+//!
+//! // In the Client --------------------------------------- //
+//! use doors::client::Client;
+//! use doors::illumos::door_h;
+//!
+//! let client = Client::open("/tmp/double.door").unwrap();
+//!
+//! let mut rbuf: [u8; 1] = [0];
+//! let mut arg = door_h::door_arg_t::new(&[111], &[], &mut rbuf);
+//!
+//! client.call(&mut arg).unwrap();
+//! assert_eq!(rbuf[0], 222);
+//! ```
+//!
 //! [1]: https://github.com/robertdfrench/revolving-doors
 //! [2]: https://illumos.org/man/3C/door_create
 //! [3]: https://illumos.org
