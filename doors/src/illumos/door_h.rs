@@ -129,8 +129,38 @@ extern "C" {
     /// [`DOOR_INFO(3C)`]: https://illumos.org/man/3c/door_info
     pub fn door_info(d: libc::c_int, info: &mut door_info_t) -> libc::c_int;
 
-    /// Revoke access to a door descriptor
+    /// Revoke access to a door.
     ///
+    /// ### Example
+    /// ```rust
+    /// use doors::illumos::door_h;
+    ///
+    /// // Define an empty server procedure so we have something to play with.
+    /// extern "C" fn hello(
+    ///     _cookie: *const libc::c_void,
+    ///     _argp: *const libc::c_char,
+    ///     _arg_size: libc::size_t,
+    ///     _dp: *const door_h::door_desc_t,
+    ///     _n_desc: libc::c_uint,
+    /// ) {
+    ///     todo!();
+    /// }
+    ///
+    /// // Create a live door
+    /// let d = unsafe { door_h::door_create(hello, std::ptr::null(), 0) };
+    ///
+    /// // Looking up info for a live door does not result in an error.
+    /// let mut info: door_h::door_info_t = Default::default();
+    /// let rc = unsafe { door_h::door_info(d, &mut info) };
+    /// assert_eq!(rc, 0);
+    ///
+    /// // Revoke the door
+    /// unsafe { door_h::door_revoke(d) };
+    ///
+    /// // Getting door info now causes an error
+    /// let rc = unsafe { door_h::door_info(d, &mut info) };
+    /// assert_eq!(rc, -1);
+    /// ```
     /// See [`DOOR_REVOKE(3C)`] for more information.
     ///
     /// [`DOOR_REVOKE(3C)`]: https://illumos.org/man/3c/door_revoke
