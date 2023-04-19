@@ -9,12 +9,14 @@
 //!
 //! This module merely re-exports the subset of the illumos doors api that we
 //! need for this project. It makes no attempt at safety or ergonomics. Insofar
-//! as possible, all of the definitions provided here are verbatim Rust imports of the
-//! definitions provided in /usr/include/sys/door.h
+//! as possible, all of the definitions and item descriptions provided here are
+//! verbatim Rust imports of the definitions provided in [door.h][2].
 //!
-//! Check out [revolving-doors][1] for an introduction to doors.
+//! If you are not already accustomed to working with doors in C, check out the
+//! excellent [revolving-doors][1] tutorial.
 //!
 //! [1]: https://github.com/robertdfrench/revolving-door#revolving-doors
+//! [2]: https://github.com/illumos/illumos-gate/blob/master/usr/src/uts/common/sys/door.h
 
 #![allow(non_camel_case_types)]
 use libc;
@@ -269,10 +271,6 @@ pub struct door_desc_t__d_data__d_desc {
 }
 
 /// Opaque Door ID
-///
-/// Some kind of door identifier. The doors API handles this for us, we don't
-/// really need to worry about it. Or at least, if I should be worried about it,
-/// I'm in a lot of trouble.
 pub type door_id_t = libc::c_ulonglong;
 
 /// Door Pointer Type
@@ -280,25 +278,80 @@ pub type door_id_t = libc::c_ulonglong;
 /// Used for cookies and door identifiers.
 pub type door_ptr_t = libc::c_ulonglong;
 
-/// Structure used to return info form door_info
+/// Structure used to return metadata from [`door_info`].
+///
+/// This struct is useful, primarily, for checking whether a door descriptor is
+/// still valid, as in the following example:
+///
+/// ```rust
+/// use doors::illumos::door_h;
+///
+/// // Define an empty server procedure so we have something to play with.
+/// extern "C" fn hello(
+///     _cookie: *const libc::c_void,
+///     _argp: *const libc::c_char,
+///     _arg_size: libc::size_t,
+///     _dp: *const door_h::door_desc_t,
+///     _n_desc: libc::c_uint,
+/// ) {
+///     todo!();
+/// }
+///
+/// // Create a live door
+/// let d = unsafe { door_h::door_create(hello, std::ptr::null(), 0) };
+///
+/// // Looking up info for a live door does not result in an error.
+/// let mut info: door_h::door_info_t = Default::default();
+/// let rc = unsafe { door_h::door_info(d, &mut info) };
+/// assert_eq!(rc, 0);
+///
+/// // A live door returns an info struct with valid fields
+/// let pid = info.di_target;
+/// assert_ne!(pid, 0);
+///
+/// // Destroy the door
+/// unsafe { door_h::door_revoke(d) };
+///
+/// // Getting door info now causes an error
+/// let rc = unsafe { door_h::door_info(d, &mut info) };
+/// assert_eq!(rc, -1);
+/// ```
 #[derive(Default, Clone, Copy, Debug, PartialEq)]
 #[repr(C, packed)]
 pub struct door_info_t {
-    /// Server process
+    /// *Server process* - This is the process id (pid) of the door server for
+    /// this door. If you were handed this descriptor by another process, then
+    /// that process did not create the original door.
     pub di_target: libc::pid_t,
 
-    /// Server procedure
+    /// *Server procedure* - This is the address of your server procedure
+    /// function, relative to the door server's address space. Anyone with
+    /// access to the door descriptor can view this information.
     pub di_proc: door_ptr_t,
 
-    /// Data cookie
+    /// *Data cookie* - This is the value of the cookie parameter that was
+    /// originally given to [`door_create`]. It looks like it may have been
+    /// intended to be used as a pointer at one point, but there are not many
+    /// applications in the illumos source tree which use it that way. Most
+    /// applications seem to load it with application-specific flags, or just
+    /// ignore it. Anyone with read access to this door on the filesystem, or
+    /// anyone who obtains access to a descriptor for this door by other means,
+    /// will be able to read the contents of the cookie. So don't use it for
+    /// secrets!
     pub di_data: door_ptr_t,
 
-    /// Attributes associated with door
+    /// *Attributes associated with door* - This is a linear combination of the
+    /// flags discussed in [`DOOR_INFO(3C)`]. Some of them can be set in the
+    /// call to [`door_create`], and some of them are set for you by the
+    /// operating system when you call [`door_info`].
+    ///
+    /// [`DOOR_INFO(3C)`]: https://illumos.org/man/3C/door_info
     pub di_attributes: door_attr_t,
 
-    /// Unique number
+    /// *Unique number* - Two doors created with the same server procedure,
+    /// cookie, and attributes should still have distinct values for this field.
     pub di_uniquifier: door_id_t,
 
-    /// Future use
+    /// 16 bytes are reserved in memory of Dennis Ritchie.
     pub di_resv: [libc::c_int; 4],
 }
