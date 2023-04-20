@@ -17,9 +17,60 @@ pub mod stropts_h;
 
 use std::ops::BitOr;
 use std::ops::BitOrAssign;
+use std::os::fd::AsRawFd;
 use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+
+pub struct DoorFd(door_h::door_desc_t);
+
+impl AsRawFd for DoorFd {
+    fn as_raw_fd(&self) -> RawFd {
+        let d_data = &self.0.d_data;
+        let d_desc = unsafe { d_data.d_desc };
+        let d_descriptor = d_desc.d_descriptor;
+        d_descriptor as RawFd
+    }
+}
+
+impl DoorFd {
+    /// Create a new `door_desc_t` from a file descriptor.
+    ///
+    /// When passing a file descriptor through a door call, the kernel needs to
+    /// know whether it should *release* that descriptor: that is, should we
+    /// transfer exclusive control of the descriptor to the receiving process,
+    /// or should each process have independent access to the resource
+    /// underlying the descriptor?
+    ///
+    /// Setting `release` to false means that both the server and the client
+    /// will have the same level of access to the underlying resource, and they
+    /// must take care not to cause conflicts.
+    ///
+    /// Setting `release` to true means that the sender will no longer have
+    /// access to the resource -- effecively, the file descriptor will be closed
+    /// once the `door_call` or `door_return` has completed. In this case, the
+    /// recipient will have exclusive control over the resource referenced by
+    /// this file descriptor.
+    pub fn new(raw: RawFd, release: bool) -> Self {
+        let d_descriptor = raw as libc::c_int;
+        let d_id = 0;
+        let d_desc = door_h::door_desc_t__d_data__d_desc { d_descriptor, d_id };
+        let d_data = door_h::door_desc_t__d_data { d_desc };
+
+        let d_attributes = match release {
+            false => door_h::DOOR_DESCRIPTOR,
+            true => door_h::DOOR_DESCRIPTOR | door_h::DOOR_RELEASE,
+        };
+        Self(door_h::door_desc_t {
+            d_attributes,
+            d_data,
+        })
+    }
+
+    pub fn will_release(&self) -> bool {
+        self.0.d_attributes == (door_h::DOOR_DESCRIPTOR | door_h::DOOR_RELEASE)
+    }
+}
 
 /// illumos Error Conditions
 ///
@@ -416,5 +467,23 @@ mod tests {
         let info2 = door_info(fd2).unwrap();
 
         assert_ne!(info1.proc(), info2.proc());
+    }
+
+    #[test]
+    fn as_raw_fd() {
+        let dd = DoorFd::new(-1, true);
+        assert_eq!(dd.as_raw_fd(), -1);
+    }
+
+    #[test]
+    fn retain_door_desc_t() {
+        let dd = DoorFd::new(-1, false);
+        assert!(!dd.will_release());
+    }
+
+    #[test]
+    fn release_door_desc_t() {
+        let dd = DoorFd::new(-1, true);
+        assert!(dd.will_release());
     }
 }

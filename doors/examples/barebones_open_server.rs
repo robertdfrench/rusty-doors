@@ -12,6 +12,7 @@
 //! /doors/tests/barebones_open_tests.rs in this repo.
 use doors::illumos::door_h;
 use doors::illumos::stropts_h;
+use doors::illumos::DoorFd;
 use libc;
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -29,8 +30,15 @@ extern "C" fn open_file(
     let txt_path_cstring = unsafe { CStr::from_ptr(argp) };
     let txt_path = txt_path_cstring.to_str().unwrap();
     let file = std::fs::File::open(txt_path).unwrap();
-    let dds = vec![door_h::door_desc_t::new(file.into_raw_fd(), true)];
-    unsafe { door_h::door_return(ptr::null(), 0, dds.as_ptr(), 1) };
+    let dds = vec![DoorFd::new(file.into_raw_fd(), true)];
+    unsafe {
+        door_h::door_return(
+            ptr::null(),
+            0,
+            dds.as_ptr() as *const door_h::door_desc_t,
+            1,
+        )
+    };
 }
 
 fn main() {

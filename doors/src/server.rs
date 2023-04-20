@@ -4,6 +4,7 @@ use crate::illumos;
 use crate::illumos::door_h::door_desc_t;
 use crate::illumos::fattach;
 use crate::illumos::DoorAttributes;
+use crate::illumos::DoorFd;
 use libc;
 use std::ffi;
 use std::fs::File;
@@ -147,13 +148,12 @@ pub struct Request<'a> {
 pub struct Response<C: AsRef<[u8]>> {
     pub data: Option<C>,
     pub num_descriptors: u32,
-    pub descriptors: [door_desc_t; 2],
+    pub descriptors: [DoorFd; 2],
 }
 
 impl<C: AsRef<[u8]>> Response<C> {
     pub fn new(data: C) -> Self {
-        let descriptors =
-            [door_desc_t::new(-1, true), door_desc_t::new(-1, true)];
+        let descriptors = [DoorFd::new(-1, true), DoorFd::new(-1, true)];
         let num_descriptors = 0;
         Self {
             data: Some(data),
@@ -164,8 +164,7 @@ impl<C: AsRef<[u8]>> Response<C> {
 
     pub fn empty() -> Self {
         let data = None;
-        let descriptors =
-            [door_desc_t::new(-1, true), door_desc_t::new(-1, true)];
+        let descriptors = [DoorFd::new(-1, true), DoorFd::new(-1, true)];
         let num_descriptors = 0;
         Self {
             data,
@@ -179,7 +178,7 @@ impl<C: AsRef<[u8]>> Response<C> {
             panic!("Only 2 descriptors are supported")
         }
 
-        let desc = door_desc_t::new(fd, release);
+        let desc = DoorFd::new(fd, release);
         self.descriptors[self.num_descriptors as usize] = desc;
         self.num_descriptors += 1;
 

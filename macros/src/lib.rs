@@ -120,7 +120,7 @@ pub fn server_procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     doors::illumos::door_h::door_return(
                         data.as_ref().as_ptr() as *const std::os::raw::c_char,
                         data.as_ref().len(),
-                        response.descriptors.as_ptr(),
+                        response.descriptors.as_ptr() as *const doors::illumos::door_h::door_desc_t,
                         response.num_descriptors,
                     )
                 },
@@ -128,7 +128,7 @@ pub fn server_procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     doors::illumos::door_h::door_return(
                         std::ptr::null() as *const std::os::raw::c_char,
                         0,
-                        response.descriptors.as_ptr(),
+                        response.descriptors.as_ptr() as *const doors::illumos::door_h::door_desc_t,
                         response.num_descriptors,
                     )
                 }
