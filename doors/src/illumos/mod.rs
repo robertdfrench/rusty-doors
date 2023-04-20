@@ -22,6 +22,48 @@ use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
+pub struct DoorArg(door_h::door_arg_t);
+
+impl<'data, 'descriptors, 'response> DoorArg {
+    pub fn new(
+        data: &'data [u8],
+        descriptors: &'descriptors [DoorFd],
+        response: &'response mut [u8],
+    ) -> Self {
+        let data_ptr = data.as_ptr() as *const libc::c_char;
+        let data_size = data.len() as libc::size_t;
+        let desc_ptr = descriptors.as_ptr() as *const door_h::door_desc_t;
+        let desc_num = descriptors.len() as libc::c_uint;
+        let rbuf = response.as_ptr() as *const libc::c_char;
+        let rsize = response.len() as libc::size_t;
+        Self(door_h::door_arg_t {
+            data_ptr,
+            data_size,
+            desc_ptr,
+            desc_num,
+            rbuf,
+            rsize,
+        })
+    }
+
+    pub fn data(&'data self) -> &'data [u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.0.data_ptr as *const u8,
+                self.0.data_size,
+            )
+        }
+    }
+
+    pub fn as_door_arg_t(&self) -> &'_ door_h::door_arg_t {
+        &(self.0)
+    }
+
+    pub fn as_mut_door_arg_t(&mut self) -> &'_ mut door_h::door_arg_t {
+        &mut (self.0)
+    }
+}
+
 pub struct DoorFd(door_h::door_desc_t);
 
 impl AsRawFd for DoorFd {

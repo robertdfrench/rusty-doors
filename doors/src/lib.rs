@@ -32,14 +32,14 @@
 //!
 //! // In the Client --------------------------------------- //
 //! use doors::client::Client;
-//! use doors::illumos::door_h;
+//! use doors::illumos::DoorArg;
 //!
 //! let client = Client::open("/tmp/double.door").unwrap();
 //!
 //! let mut rbuf: [u8; 1] = [0];
-//! let mut arg = door_h::door_arg_t::new(&[111], &[], &mut rbuf);
+//! let mut arg = DoorArg::new(&[111], &[], &mut rbuf);
 //!
-//! client.call(&mut arg).unwrap();
+//! client.call(arg.as_mut_door_arg_t()).unwrap();
 //! assert_eq!(rbuf[0], 222);
 //! ```
 //!
@@ -51,28 +51,3 @@ pub use door_macros::server_procedure;
 pub mod client;
 pub mod illumos;
 pub mod server;
-
-use illumos::door_h;
-
-impl<'data, 'descriptors, 'response> door_h::door_arg_t {
-    pub fn new(
-        data: &'data [u8],
-        descriptors: &'descriptors [door_h::door_desc_t],
-        response: &'response mut [u8],
-    ) -> Self {
-        let data_ptr = data.as_ptr() as *const libc::c_char;
-        let data_size = data.len() as libc::size_t;
-        let desc_ptr = descriptors.as_ptr();
-        let desc_num = descriptors.len() as libc::c_uint;
-        let rbuf = response.as_ptr() as *const libc::c_char;
-        let rsize = response.len() as libc::size_t;
-        Self {
-            data_ptr,
-            data_size,
-            desc_ptr,
-            desc_num,
-            rbuf,
-            rsize,
-        }
-    }
-}

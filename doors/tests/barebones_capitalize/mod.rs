@@ -7,8 +7,8 @@
 use doors::client::Client;
 use doors::client::DoorCallError;
 use doors::illumos::door_h;
-use doors::illumos::door_h::door_arg_t;
 use doors::illumos::errno_h;
+use doors::illumos::DoorArg;
 use libc;
 use std::ffi::CStr;
 use std::ffi::CString;
@@ -74,70 +74,77 @@ fn door_data_is_capitalized() {
 
 #[test]
 fn new_door_arg() {
-    let text = b"Hello, World!";
+    let source = CString::new("Hello, World!").unwrap();
+    let text = source.to_bytes_with_nul();
     let mut buffer = [0; 1024];
-    let args = door_h::door_arg_t::new(text, &vec![], &mut buffer);
+    let args = DoorArg::new(text, &vec![], &mut buffer);
     let door = std::fs::File::open("/tmp/barebones_capitalize.door").unwrap();
     let door = door.as_raw_fd();
 
-    let rc = unsafe { door_h::door_call(door, &args) };
+    let rc = unsafe { door_h::door_call(door, args.as_door_arg_t()) };
     if rc == -1 {
         assert_ne!(errno_h::errno(), libc::EBADF);
     }
     assert_eq!(rc, 0);
-    assert_eq!(args.data_size, 13);
-    let response = unsafe { std::ffi::CStr::from_ptr(args.data_ptr) };
+    assert_eq!(args.data().len(), 14);
+    let response = std::ffi::CStr::from_bytes_with_nul(args.data()).unwrap();
     let response = response.to_str().unwrap();
     assert_eq!(response, "HELLO, WORLD!");
 }
 
 #[test]
 fn dropped_doors_are_invalid() {
-    let text = b"Hello, World!";
+    let source = CString::new("Hello, World!").unwrap();
+    let text = source.to_bytes_with_nul();
     let mut buffer = [0; 1024];
-    let mut args = door_arg_t::new(text, &vec![], &mut buffer);
+    let mut args = DoorArg::new(text, &vec![], &mut buffer);
     let file = std::fs::File::open("/tmp/barebones_capitalize.door").unwrap();
     let fd = file.as_raw_fd();
     let door = unsafe { Client::from_raw_fd(file.into_raw_fd()) };
 
-    door.call(&mut args).unwrap();
-    assert_eq!(args.data_size, 13);
-    let response = unsafe { std::ffi::CStr::from_ptr(args.data_ptr) };
+    door.call(args.as_mut_door_arg_t()).unwrap();
+    assert_eq!(args.data().len(), 14);
+    let response = std::ffi::CStr::from_bytes_with_nul(args.data()).unwrap();
     let response = response.to_str().unwrap();
     assert_eq!(response, "HELLO, WORLD!");
 
     drop(door);
 
     let door = unsafe { Client::from_raw_fd(fd) };
-    let mut args = door_arg_t::new(text, &vec![], &mut buffer);
-    assert_eq!(door.call(&mut args), Err(DoorCallError::EBADF));
+    let mut args = DoorArg::new(text, &vec![], &mut buffer);
+    assert_eq!(
+        door.call(args.as_mut_door_arg_t()),
+        Err(DoorCallError::EBADF)
+    );
 }
 
 #[test]
 fn open_door_from_path() {
-    let text = b"Hello, World!";
+    let source = CString::new("Hello, World!").unwrap();
+    let text = source.to_bytes_with_nul();
     let mut buffer = [0; 1024];
-    let mut args = door_arg_t::new(text, &vec![], &mut buffer);
+    let mut args = DoorArg::new(text, &vec![], &mut buffer);
     let door = Client::open("/tmp/barebones_capitalize.door").unwrap();
 
-    door.call(&mut args).unwrap();
-    assert_eq!(args.data_size, 13);
-    let response = unsafe { std::ffi::CStr::from_ptr(args.data_ptr) };
+    door.call(args.as_mut_door_arg_t()).unwrap();
+    assert_eq!(args.data().len(), 14);
+    let response = std::ffi::CStr::from_bytes_with_nul(args.data()).unwrap();
     let response = response.to_str().unwrap();
     assert_eq!(response, "HELLO, WORLD!");
 }
 
 #[test]
 fn call_door() {
-    let text = b"Hello, World!";
+    let source = CString::new("Hello, World!").unwrap();
+    let text = source.to_bytes_with_nul();
     let mut buffer = [0; 1024];
-    let mut args = door_arg_t::new(text, &vec![], &mut buffer);
+    let mut args = DoorArg::new(text, &vec![], &mut buffer);
     let file = std::fs::File::open("/tmp/barebones_capitalize.door").unwrap();
     let door = unsafe { Client::from_raw_fd(file.as_raw_fd()) };
 
-    door.call(&mut args).unwrap();
-    assert_eq!(args.data_size, 13);
-    let response = unsafe { std::ffi::CStr::from_ptr(args.data_ptr) };
+    door.call(args.as_mut_door_arg_t()).unwrap();
+    assert_eq!(args.data().len(), 14);
+    let response = std::ffi::CStr::from_bytes_with_nul(args.data()).unwrap();
     let response = response.to_str().unwrap();
     assert_eq!(response, "HELLO, WORLD!");
 }
