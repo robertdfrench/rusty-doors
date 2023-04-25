@@ -1,6 +1,6 @@
 [package]
 name = "doors"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 authors = ["Robert D. French <robert@robertdfrench.me>"]
 description = "Access the illumos Doors API from Rust"
