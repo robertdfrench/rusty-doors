@@ -15,7 +15,7 @@ use doors::server::Request;
 use doors::server::Response;
 
 #[doors::server_procedure]
-fn double(x: Request<'_>) -> Response<[u8; 1]> {
+fn double(x: Request) -> Response<[u8; 1]> {
   if x.data.len() > 0 {
     return Response::new([x.data[0] * 2]);
   } else {
