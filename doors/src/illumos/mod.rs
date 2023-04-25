@@ -22,6 +22,10 @@ use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
+/// Arguments passed to Door Call
+///
+/// Consists of data and file descriptors. May also have a buffer for the return
+/// dta.
 pub struct DoorArg(door_h::door_arg_t);
 
 impl<'data, 'descriptors, 'response> DoorArg {

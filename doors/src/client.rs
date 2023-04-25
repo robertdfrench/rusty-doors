@@ -3,6 +3,7 @@
 use crate::illumos::door_h::door_arg_t;
 use crate::illumos::door_h::door_call;
 use crate::illumos::errno_h::errno;
+use crate::illumos::DoorArg;
 use std::fs::File;
 use std::io;
 use std::os::fd::FromRawFd;
@@ -128,5 +129,32 @@ impl Client {
                 _ => unreachable!(),
             }),
         }
+    }
+
+    /// Issue a door call with Data only
+    ///
+    /// ## Example
+    ///
+    /// ```rust
+    /// use doors::client::Client;
+    /// use std::ffi::CString;
+    /// use std::ffi::CStr;
+    ///
+    /// let capitalize = Client::open("/tmp/barebones_capitalize.door")
+    ///     .unwrap();
+    /// let text = CString::new("Hello, World!").unwrap();
+    /// let response = capitalize.call_with_data(text.as_bytes()).unwrap();
+    /// let caps = unsafe {
+    ///     CStr::from_ptr(response.data().as_ptr() as *const i8)
+    /// };
+    /// assert_eq!(caps.to_str(), Ok("HELLO, WORLD!"));
+    /// ```
+    pub fn call_with_data(
+        &self,
+        data: &[u8],
+    ) -> Result<DoorArg, DoorCallError> {
+        let mut arg = DoorArg::new(data, &[], &mut []);
+        self.call(arg.as_mut_door_arg_t())?;
+        Ok(arg)
     }
 }
