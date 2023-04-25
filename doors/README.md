@@ -46,15 +46,11 @@ something like this:
 
 ```rust
 use doors::client::Client;
-use doors::illumos::door_h;
 
 let client = Client::open("/tmp/double.door").unwrap();
 
-let mut rbuf: [u8; 1] = [0];
-let mut arg = door_h::door_arg_t::new(&[111], &[], &mut rbuf);
-
-client.call(&mut arg).unwrap();
-assert_eq!(rbuf[0], 222);
+let response = client.call_with_data(&[111]).unwrap();
+assert_eq!(response.data()[0], 222);
 ```
 
 ## Acknowledgements

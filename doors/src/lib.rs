@@ -32,15 +32,11 @@
 //!
 //! // In the Client --------------------------------------- //
 //! use doors::client::Client;
-//! use doors::illumos::DoorArg;
 //!
 //! let client = Client::open("/tmp/double.door").unwrap();
 //!
-//! let mut rbuf: [u8; 1] = [0];
-//! let mut arg = DoorArg::new(&[111], &[], &mut rbuf);
-//!
-//! client.call(arg.as_mut_door_arg_t()).unwrap();
-//! assert_eq!(rbuf[0], 222);
+//! let response = client.call_with_data(&[111]).unwrap();
+//! assert_eq!(response.data()[0], 222);
 //! ```
 //!
 //! [1]: https://github.com/robertdfrench/revolving-doors
