@@ -4,11 +4,11 @@
 //
 // Copyright 2023 Robert D. French
 
-use doors::client::Client;
-use doors::client::DoorCallError;
 use doors::illumos::door_h;
 use doors::illumos::errno_h;
 use doors::illumos::DoorArg;
+use doors::Client;
+use doors::DoorCallError;
 use libc;
 use std::ffi::CStr;
 use std::ffi::CString;

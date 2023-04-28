@@ -1,9 +1,9 @@
-use doors::client;
 use doors::illumos::DoorArg;
+use doors::Client;
 
 #[test]
 fn procedural_macro_double_u8() {
-    let double = client::Client::open("/tmp/procmac_double.door").unwrap();
+    let double = Client::open("/tmp/procmac_double.door").unwrap();
 
     let mut rbuf: [u8; 1] = [0];
 

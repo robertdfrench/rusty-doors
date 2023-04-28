@@ -1,10 +1,10 @@
-use doors::client;
 use doors::illumos::DoorArg;
+use doors::Client;
 
 #[test]
 fn procmac_increment_shared_counter() {
-    let increment = client::Client::open("/tmp/procmac_kv_store.door").unwrap();
-    let fetch = client::Client::open("/tmp/procmac_kv_fetch.door").unwrap();
+    let increment = Client::open("/tmp/procmac_kv_store.door").unwrap();
+    let fetch = Client::open("/tmp/procmac_kv_fetch.door").unwrap();
 
     let mut rbuf: [u8; 1] = [0];
 
