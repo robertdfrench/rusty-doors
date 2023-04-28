@@ -205,3 +205,73 @@ impl Client {
         Ok(arg)
     }
 }
+
+pub struct DoorPayload<'a, 'b> {
+    data: &'a [u8],
+    descriptors: Vec<illumos::DoorFd>,
+    original_rbuf: Option<&'a mut [u8]>,
+    mmaped_rbuf: Option<&'b mut [u8]>,
+}
+
+impl<'a, 'b> DoorPayload<'a, 'b> {
+    pub fn new(data: &'a [u8]) -> Self {
+        let descriptors = vec![];
+        let original_rbuf = None;
+        let mmaped_rbuf = None;
+        Self {
+            data,
+            descriptors,
+            original_rbuf,
+            mmaped_rbuf,
+        }
+    }
+
+    pub fn new_with_rbuf(data: &'a [u8], rbuf: &'a mut [u8]) -> Self {
+        let descriptors = vec![];
+        let original_rbuf = Some(rbuf);
+        let mmaped_rbuf = None;
+        Self {
+            data,
+            descriptors,
+            original_rbuf,
+            mmaped_rbuf,
+        }
+    }
+
+    fn as_door_arg(&mut self) -> DoorArg {
+        let data = self.data;
+        let descriptors = &self.descriptors;
+        if let Some(buf) = &mut self.mmaped_rbuf {
+            return DoorArg::new(data, descriptors, buf);
+        }
+        if let Some(buf) = &mut self.original_rbuf {
+            return DoorArg::new(data, descriptors, buf);
+        }
+        DoorArg::new(data, descriptors, &mut [])
+    }
+
+    pub fn call(&mut self, client: Client) -> Result<(), DoorCallError> {
+        let mut binding = self.as_door_arg();
+        let arg = binding.as_mut_door_arg_t();
+        client.call(arg)?;
+        if arg.rbuf == (self.data.as_ptr() as *const i8) {
+            self.mmaped_rbuf = None; // IS this a leak?
+        } else {
+            self.mmaped_rbuf = Some(unsafe {
+                std::slice::from_raw_parts_mut(arg.rbuf as *mut u8, arg.rsize)
+            });
+        }
+
+        Ok(())
+    }
+}
+
+impl<'a, 'b> Drop for DoorPayload<'a, 'b> {
+    fn drop(&mut self) {
+        if let Some(x) = &mut self.mmaped_rbuf {
+            unsafe {
+                libc::munmap(x.as_mut_ptr() as *mut libc::c_void, x.len());
+            }
+        }
+    }
+}
