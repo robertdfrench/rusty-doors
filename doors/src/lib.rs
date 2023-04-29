@@ -206,8 +206,9 @@ impl Client {
     }
 }
 
+/// Data (and descriptors) to be sent through a Door
 pub struct DoorPayload<'a, 'b> {
-    data: &'a [u8],
+    pub data: &'a [u8],
     descriptors: Vec<illumos::DoorFd>,
     original_rbuf: Option<&'a mut [u8]>,
     mmaped_rbuf: Option<&'b mut [u8]>,
@@ -254,7 +255,11 @@ impl<'a, 'b> DoorPayload<'a, 'b> {
         let mut binding = self.as_door_arg();
         let arg = binding.as_mut_door_arg_t();
         client.call(arg)?;
+        self.data = unsafe {
+            std::slice::from_raw_parts(arg.data_ptr as *const u8, arg.data_size)
+        };
         if arg.rbuf == (self.data.as_ptr() as *const i8) {
+            // What happens when this gets called twice?
             self.mmaped_rbuf = None; // IS this a leak?
         } else {
             self.mmaped_rbuf = Some(unsafe {
