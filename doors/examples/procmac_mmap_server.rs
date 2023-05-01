@@ -12,9 +12,18 @@ fn return_junk(_payload: Request<'_>) -> Response<[u8; 4096]> {
     Response::new(x)
 }
 
+#[doors::server_procedure]
+fn return_no_junk(_payload: Request<'_>) -> Response<[u8; 1]> {
+    let x: [u8; 1] = [6; 1];
+    Response::new(x)
+}
+
 fn main() {
     let door = Door::create(return_junk).unwrap();
     door.force_install("/tmp/junk.door").unwrap();
+
+    let door2 = Door::create(return_no_junk).unwrap();
+    door2.force_install("/tmp/no_junk.door").unwrap();
 
     std::thread::sleep(std::time::Duration::from_secs(5));
 }
