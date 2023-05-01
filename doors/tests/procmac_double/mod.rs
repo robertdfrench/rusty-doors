@@ -1,5 +1,5 @@
-use doors::illumos::DoorArg;
 use doors::Client;
+use doors::DoorArgument;
 
 #[test]
 fn procedural_macro_double_u8() {
@@ -7,7 +7,7 @@ fn procedural_macro_double_u8() {
 
     let mut rbuf: [u8; 1] = [0];
 
-    let mut arg = DoorArg::new(&[111], &[], &mut rbuf);
-    double.call(arg.as_mut_door_arg_t()).unwrap();
+    let arg = DoorArgument::new(&[111], &[], &mut rbuf);
+    double.call(arg).unwrap();
     assert_eq!(rbuf[0], 222);
 }

@@ -59,6 +59,16 @@ impl<'data, 'descriptors, 'response> DoorArg {
         }
     }
 
+    pub fn rbuf(&'response self) -> &'response [u8] {
+        unsafe {
+            std::slice::from_raw_parts(self.0.rbuf as *const u8, self.0.rsize)
+        }
+    }
+
+    pub fn rbuf_addr(&self) -> u64 {
+        self.0.rbuf as u64
+    }
+
     pub fn as_door_arg_t(&self) -> &'_ door_h::door_arg_t {
         &(self.0)
     }
@@ -66,6 +76,23 @@ impl<'data, 'descriptors, 'response> DoorArg {
     pub fn as_mut_door_arg_t(&mut self) -> &'_ mut door_h::door_arg_t {
         &mut (self.0)
     }
+
+    pub fn munmap_rbuf(&mut self) -> Result<(), MunmapError> {
+        match unsafe {
+            libc::munmap(self.0.rbuf as *mut libc::c_void, self.0.rsize)
+        } {
+            0 => Ok(()),
+            _ => match errno_h::errno() {
+                libc::EINVAL => Err(MunmapError::EINVAL),
+                _ => unreachable!(),
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum MunmapError {
+    EINVAL,
 }
 
 pub struct DoorFd(door_h::door_desc_t);

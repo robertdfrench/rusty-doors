@@ -1,3 +1,10 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * Copyright 2023 Robert D. French
+ */
 //! A Rust-friendly interface for [illumos Doors][1].
 //!
 //! [Doors][2] are a high-speed, RPC-style interprocess communication facility
@@ -51,6 +58,7 @@ use crate::illumos::door_h::door_arg_t;
 use crate::illumos::door_h::door_call;
 use crate::illumos::errno_h::errno;
 use crate::illumos::DoorArg;
+use crate::illumos::DoorFd;
 use std::fs::File;
 use std::io;
 use std::os::fd::FromRawFd;
@@ -138,6 +146,75 @@ impl Drop for Client {
     }
 }
 
+pub enum DoorArgument {
+    BorrowedRbuf(DoorArg),
+    OwnedRbuf(DoorArg),
+}
+
+impl DoorArgument {
+    pub fn new(
+        data: &[u8],
+        descriptors: &[DoorFd],
+        response: &mut [u8],
+    ) -> Self {
+        Self::borrowed_rbuf(data, descriptors, response)
+    }
+
+    pub fn borrowed_rbuf(
+        data: &[u8],
+        descriptors: &[DoorFd],
+        response: &mut [u8],
+    ) -> Self {
+        Self::BorrowedRbuf(DoorArg::new(data, descriptors, response))
+    }
+
+    pub fn owned_rbuf(
+        data: &[u8],
+        descriptors: &[DoorFd],
+        response: &mut [u8],
+    ) -> Self {
+        Self::OwnedRbuf(DoorArg::new(data, descriptors, response))
+    }
+
+    fn inner(&self) -> &DoorArg {
+        match self {
+            Self::BorrowedRbuf(inner) => inner,
+            Self::OwnedRbuf(inner) => inner,
+        }
+    }
+
+    fn inner_mut(&mut self) -> &mut DoorArg {
+        match self {
+            Self::BorrowedRbuf(inner) => inner,
+            Self::OwnedRbuf(inner) => inner,
+        }
+    }
+
+    pub fn as_door_arg_t(&self) -> &door_arg_t {
+        self.inner().as_door_arg_t()
+    }
+
+    pub fn data(&self) -> &[u8] {
+        self.inner().data()
+    }
+
+    pub fn rbuf(&self) -> &[u8] {
+        self.inner().rbuf()
+    }
+}
+
+impl Drop for DoorArgument {
+    fn drop(&mut self) {
+        if let Self::OwnedRbuf(arg) = self {
+            // If munmap fails, we do want to panic, because it means we've
+            // tried to munmap something that wasn't mapped into our address
+            // space. That should never happen, but if it does, it's worth
+            // crashing, because something else is seriously wrong.
+            arg.munmap_rbuf().unwrap()
+        }
+    }
+}
+
 impl Client {
     /// Open a door client like you would a file
     pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
@@ -158,9 +235,37 @@ impl Client {
     ///
     /// [`DOOR_CALL(3C)`]: https://illumos.org/man/3C/door_call
     /// [`MUNMAP(2)`]: https://illumos.org/man/2/munmap
-    pub fn call(&self, arg: &mut door_arg_t) -> Result<(), DoorCallError> {
-        match unsafe { door_call(self.0, arg) } {
-            0 => Ok(()),
+    pub fn call(
+        &self,
+        mut arg: DoorArgument,
+    ) -> Result<DoorArgument, DoorCallError> {
+        let a = arg.inner().rbuf_addr();
+        let x = arg.inner_mut().as_mut_door_arg_t();
+        match unsafe { door_call(self.0, x) } {
+            0 => match (x.rbuf as u64) == a {
+                true => Ok(arg),
+                false => {
+                    let data = unsafe {
+                        std::slice::from_raw_parts(
+                            x.data_ptr as *const u8,
+                            x.data_size,
+                        )
+                    };
+                    let desc = unsafe {
+                        std::slice::from_raw_parts(
+                            x.desc_ptr as *const DoorFd,
+                            x.desc_num.try_into().unwrap(),
+                        )
+                    };
+                    let rbuf = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            x.rbuf as *mut u8,
+                            x.rsize,
+                        )
+                    };
+                    Ok(DoorArgument::owned_rbuf(data, desc, rbuf))
+                }
+            },
             _ => Err(match errno() {
                 libc::E2BIG => DoorCallError::E2BIG,
                 libc::EAGAIN => DoorCallError::EAGAIN,
@@ -199,9 +304,8 @@ impl Client {
     pub fn call_with_data(
         &self,
         data: &[u8],
-    ) -> Result<DoorArg, DoorCallError> {
-        let mut arg = DoorArg::new(data, &[], &mut []);
-        self.call(arg.as_mut_door_arg_t())?;
-        Ok(arg)
+    ) -> Result<DoorArgument, DoorCallError> {
+        let arg = DoorArgument::new(data, &[], &mut []);
+        self.call(arg)
     }
 }
