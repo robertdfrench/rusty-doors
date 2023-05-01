@@ -1,5 +1,5 @@
-use doors::illumos::DoorArg;
 use doors::Client;
+use doors::DoorArgument;
 
 #[test]
 fn procmac_increment_shared_counter() {
@@ -8,11 +8,15 @@ fn procmac_increment_shared_counter() {
 
     let mut rbuf: [u8; 1] = [0];
 
-    let mut arg = DoorArg::new(&[], &[], &mut rbuf);
-    increment.call(arg.as_mut_door_arg_t()).unwrap();
-    increment.call(arg.as_mut_door_arg_t()).unwrap();
-    increment.call(arg.as_mut_door_arg_t()).unwrap();
-    increment.call(arg.as_mut_door_arg_t()).unwrap();
-    fetch.call(arg.as_mut_door_arg_t()).unwrap();
+    let arg = DoorArgument::new(&[], &[], &mut rbuf);
+    increment.call(arg).unwrap();
+    let arg = DoorArgument::new(&[], &[], &mut rbuf);
+    increment.call(arg).unwrap();
+    let arg = DoorArgument::new(&[], &[], &mut rbuf);
+    increment.call(arg).unwrap();
+    let arg = DoorArgument::new(&[], &[], &mut rbuf);
+    increment.call(arg).unwrap();
+    let arg = DoorArgument::new(&[], &[], &mut rbuf);
+    fetch.call(arg).unwrap();
     assert_eq!(rbuf[0], 4);
 }

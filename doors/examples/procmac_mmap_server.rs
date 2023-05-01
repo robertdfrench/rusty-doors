@@ -4,7 +4,7 @@
 use doors::server::{Door, Request, Response};
 
 #[doors::server_procedure]
-fn return_junk(payload: Request<'_>) -> Response<[u8; 4096]> {
+fn return_junk(_payload: Request<'_>) -> Response<[u8; 4096]> {
     let mut x: [u8; 4096] = [0; 4096];
     for i in 0..4096 {
         x[i] = (i % 255) as u8;

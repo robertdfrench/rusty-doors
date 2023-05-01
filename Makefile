@@ -16,8 +16,8 @@ all: about build format test docs ##: Run the full build pipeline
 build: ##: Build debug and release binaries
 	@$(banner)
 	cargo build
+	cargo build --tests
 	cargo build --examples
-	cargo build --release
 
 docs: ##: Build documentation
 	@$(banner)
