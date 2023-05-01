@@ -45,7 +45,7 @@ A client program which invokes that server procedure might look
 something like this:
 
 ```rust
-use doors::client::Client;
+use doors::Client;
 
 let client = Client::open("/tmp/double.door").unwrap();
 
