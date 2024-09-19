@@ -58,7 +58,7 @@ fn door_data_is_capitalized() {
         // transferred to a separate thread which executes
         // `capitalize_string` on our behalf.
         door_h::door_call(client_door_fd, &params);
-        libc::close(client_door_fd);
+        // libc::close(client_door_fd);
 
         // Unpack the returned bytes and compare!
         let capitalized = CStr::from_ptr(rbuf);

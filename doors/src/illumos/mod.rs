@@ -191,6 +191,13 @@ pub enum Error {
 
     /// Bad address
     EFAULT,
+
+    ///
+    EAGAIN,
+
+    ///
+    ENOMEM,
+
 }
 
 /// Attach a doors-based file descriptor to an object in the file system name
@@ -398,6 +405,55 @@ impl DoorInfo {
 
     pub fn id(&self) -> u64 {
         self.0.di_uniquifier
+    }
+}
+
+pub struct UCred {
+    info: *mut libc::ucred_t
+}
+
+impl UCred {
+    pub fn new() -> Result<Self, Error> {
+        let mut info: *mut libc::ucred_t = std::ptr::null_mut();
+        match unsafe { door_h::door_ucred(&mut info) } {
+            0 => Ok(Self{ info }),
+            _ => match errno_h::errno() {
+                libc::EAGAIN => Err(Error::EAGAIN),
+                libc::EFAULT => Err(Error::EFAULT),
+                libc::EINVAL => Err(Error::EINVAL),
+                libc::ENOMEM => Err(Error::ENOMEM),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    pub fn renew(mut self) -> Result<Self, Error> {
+        match unsafe { door_h::door_ucred(&mut self.info) } {
+            0 => Ok(self),
+            _ => match errno_h::errno() {
+                libc::EAGAIN => Err(Error::EAGAIN),
+                libc::EFAULT => Err(Error::EFAULT),
+                libc::EINVAL => Err(Error::EINVAL),
+                libc::ENOMEM => Err(Error::ENOMEM),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    pub fn euid(&self) -> Result<libc::uid_t, Error> {
+        match unsafe { libc::ucred_geteuid(self.info) } {
+            u32::MAX => match errno_h::errno() {
+                libc::EINVAL => Err(Error::EINVAL),
+                _ => unreachable!(),
+            },
+            euid => Ok(euid),
+        }
+    }
+}
+
+impl Drop for UCred {
+    fn drop(&mut self) {
+        unsafe { libc::ucred_free(self.info); }
     }
 }
 

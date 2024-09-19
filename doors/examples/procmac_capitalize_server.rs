@@ -13,5 +13,5 @@ fn main() {
     let door = Door::create(double).unwrap();
     door.force_install("/tmp/procmac_double.door").unwrap();
 
-    std::thread::sleep(std::time::Duration::from_secs(5));
+    std::thread::sleep(std::time::Duration::from_secs(10));
 }

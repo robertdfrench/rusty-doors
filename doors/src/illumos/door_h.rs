@@ -165,6 +165,8 @@ extern "C" {
     ///
     /// [`DOOR_REVOKE(3C)`]: https://illumos.org/man/3c/door_revoke
     pub fn door_revoke(d: libc::c_int) -> libc::c_int;
+
+    pub fn door_ucred(info: &mut *mut libc::ucred_t) -> libc::c_int;
 }
 
 /// Arguments for, and Return Values from, a Door invocation.
