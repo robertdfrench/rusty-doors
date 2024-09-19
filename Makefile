@@ -34,11 +34,6 @@ format: ##: Check for code formatting issues
 
 hook: .git/hooks/pre-commit ##: Run 'make all' as a pre-commit hook
 
-launch: ##: Generate launch script for the example servers
-	@find doors/examples -type f -name '*_server.rs' \
-		| sed 's,doors,target/debug,; s/\.rs//' \
-		| xargs -n1 -Ix echo './x &'
-
 publish: ##: Publish all crates in this workspace to crates.io
 	@$(banner)
 	cargo publish --package door-macros
@@ -46,8 +41,4 @@ publish: ##: Publish all crates in this workspace to crates.io
 
 test: build ##: Run tests against the example servers
 	@$(banner)
-	true \
-		&& eval `make launch` \
-		&& sleep 1 \
-		&& cargo test \
-		&& wait
+	cargo test
