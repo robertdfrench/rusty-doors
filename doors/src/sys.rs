@@ -64,6 +64,16 @@ pub(crate) unsafe fn door_server_create(
     doors_sys::door_server_create(f)
 }
 
+/// `door_bind(3C)`.
+///
+/// Puts the calling thread into a door's private pool. A door made
+/// with `DOOR_PRIVATE` is served ONLY by threads that bound to it; a
+/// thread that parks in `door_return` without binding joins the
+/// process-wide pool instead, where that door will never see it.
+pub(crate) unsafe fn door_bind(d: c_int) -> c_int {
+    doors_sys::door_bind(d)
+}
+
 /// `door_revoke(3C)`.
 pub(crate) unsafe fn door_revoke(d: c_int) -> c_int {
     doors_sys::door_revoke(d)

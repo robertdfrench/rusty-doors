@@ -17,7 +17,9 @@ use doors_sys::{
 };
 use std::ffi::{c_int, c_uint};
 use std::ops::RangeInclusive;
-use std::sync::{Arc, Mutex, Once};
+use std::os::fd::RawFd;
+use std::sync::{Arc, Condvar, Mutex, Once};
+use std::time::{Duration, Instant};
 
 /// The default stack for a door server thread.
 ///
@@ -273,6 +275,10 @@ impl<S: Send + Sync + 'static> DoorBuilder<S> {
             return Err(err);
         }
 
+        // A private door's server threads are waiting for this, so
+        // publish it the moment we have it. See DoorThreadInfo.
+        publish_fd(cookie as usize, fd);
+
         // Parameters have to be set after creation. A failure here
         // leaves a live door, so unwind it properly.
         let set = |param: c_int, value: usize| -> Result<(), Error> {
@@ -318,35 +324,104 @@ impl<S: Send + Sync + 'static> DoorBuilder<S> {
     }
 }
 
-/// Per-door server thread stack sizes, keyed by cookie.
+/// What each door's server threads need, keyed by cookie.
 ///
 /// `door_server_create(3C)` installs ONE thread-creation function for
-/// the whole process, but each door may want a different stack. The
-/// callback is handed a `door_info_t`, whose `di_data` field is the
-/// door's cookie — the one value we already know before `door_create`
-/// returns. So the cookie is the key.
-static STACK_SIZES: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+/// the whole process, but each door needs different things from it: a
+/// stack size, and — if the door has its own pool — its descriptor, to
+/// bind to. The callback is handed a `door_info_t`, whose `di_data`
+/// field is the door's cookie, and the cookie is the one value we know
+/// before `door_create` returns. So the cookie is the key.
+///
+/// `fd` starts as `None` because of an ordering problem that is real:
+/// for a `DOOR_PRIVATE` door the creation function can be called
+/// *during* `door_create`, before `door_create` has returned the
+/// descriptor. The builder publishes it as soon as it has it, and
+/// [`wait_for_fd`] is how a server thread waits for that.
+struct DoorThreadInfo {
+    stack: usize,
+    fd: Option<RawFd>,
+}
+
+static DOOR_THREADS: Mutex<Vec<(usize, DoorThreadInfo)>> =
+    Mutex::new(Vec::new());
+
+/// Woken when a descriptor is published, so waiting server threads can
+/// stop waiting the moment it appears rather than polling.
+static FD_PUBLISHED: Condvar = Condvar::new();
 
 fn register_stack_size(cookie: usize, stack: usize) {
-    let mut table = STACK_SIZES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut table = DOOR_THREADS.lock().unwrap_or_else(|e| e.into_inner());
     match table.iter_mut().find(|(c, _)| *c == cookie) {
-        Some(entry) => entry.1 = stack,
-        None => table.push((cookie, stack)),
+        Some(entry) => entry.1.stack = stack,
+        None => table.push((cookie, DoorThreadInfo { stack, fd: None })),
     }
 }
 
+/// Tell any waiting server thread which descriptor this door got.
+fn publish_fd(cookie: usize, fd: RawFd) {
+    let mut table = DOOR_THREADS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = table.iter_mut().find(|(c, _)| *c == cookie) {
+        entry.1.fd = Some(fd);
+    }
+    drop(table);
+    FD_PUBLISHED.notify_all();
+}
+
 fn forget_stack_size(cookie: usize) {
-    let mut table = STACK_SIZES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut table = DOOR_THREADS.lock().unwrap_or_else(|e| e.into_inner());
     table.retain(|(c, _)| *c != cookie);
+    drop(table);
+    // Wake anyone still waiting, so a door that failed to build does
+    // not leave a thread parked on the condvar until the timeout.
+    FD_PUBLISHED.notify_all();
 }
 
 fn stack_size_for(cookie: usize) -> usize {
-    let table = STACK_SIZES.lock().unwrap_or_else(|e| e.into_inner());
+    let table = DOOR_THREADS.lock().unwrap_or_else(|e| e.into_inner());
     table
         .iter()
         .find(|(c, _)| *c == cookie)
-        .map(|(_, s)| *s)
+        .map(|(_, i)| i.stack)
         .unwrap_or(DEFAULT_THREAD_STACK)
+}
+
+/// How long a server thread waits for its door's descriptor.
+///
+/// Bounded on purpose. If the descriptor never arrives — the door
+/// failed to build, say — the thread parks unbound rather than waiting
+/// for ever. An unbound thread on a private door is useless, but it is
+/// a great deal better than a thread that never comes back.
+const FD_WAIT: Duration = Duration::from_secs(5);
+
+/// Wait for `door_create` to publish this door's descriptor.
+///
+/// Returns `None` if it does not arrive in time, or if the entry went
+/// away because the door failed to build.
+fn wait_for_fd(cookie: usize) -> Option<RawFd> {
+    let mut table = DOOR_THREADS.lock().unwrap_or_else(|e| e.into_inner());
+    let deadline = Instant::now() + FD_WAIT;
+
+    loop {
+        match table.iter().find(|(c, _)| *c == cookie) {
+            // The entry is gone: the door failed to build.
+            None => return None,
+            Some((_, info)) => {
+                if let Some(fd) = info.fd {
+                    return Some(fd);
+                }
+            }
+        }
+
+        let left = deadline.checked_duration_since(Instant::now())?;
+        let (guard, timeout) = FD_PUBLISHED
+            .wait_timeout(table, left)
+            .unwrap_or_else(|e| e.into_inner());
+        table = guard;
+        if timeout.timed_out() {
+            return None;
+        }
+    }
 }
 
 /// Install our thread-creation function, once per process.
@@ -385,14 +460,21 @@ fn install_server_create_once() {
 /// `experiments/servercreate.c` confirms by reading it back with
 /// `thr_stksegment`.
 unsafe extern "C" fn create_server_thread(info: *mut door_info_t) {
-    // Copy the field out. door_info_t is packed, so a reference to
-    // di_data would be misaligned.
-    let cookie = if info.is_null() {
-        0
+    // Copy the fields out. door_info_t is packed, so a reference to
+    // either of these would be misaligned.
+    let (cookie, attrs) = if info.is_null() {
+        (0usize, 0u32)
     } else {
-        (*info).di_data as usize
+        ((*info).di_data as usize, (*info).di_attributes)
     };
     let stack = stack_size_for(cookie);
+
+    // A DOOR_PRIVATE door has its own pool, and a thread joins that
+    // pool by calling door_bind before it parks. Only private doors:
+    // a bound thread serves that door and nothing else, so binding a
+    // shared door would take the thread out of the general pool and
+    // starve every other door in the process.
+    let private = attrs & doors_sys::DOOR_PRIVATE != 0;
 
     let _ = std::thread::Builder::new()
         .stack_size(stack)
@@ -409,9 +491,31 @@ unsafe extern "C" fn create_server_thread(info: *mut door_info_t) {
                 );
             }
 
-            // Join the door's pool of waiting threads. This does not
-            // return: from here the kernel drives the thread, entering
-            // the server procedure when a call arrives.
+            if private {
+                // The descriptor may not exist yet: for a private door
+                // this function can be called from inside door_create,
+                // before it has returned one. So wait for the builder
+                // to publish it. The wait is bounded; if it never
+                // comes we park unbound, which is useless for this
+                // door but better than a thread that never returns.
+                if let Some(fd) = wait_for_fd(cookie) {
+                    // SAFETY: fd is the descriptor door_create just
+                    // handed the builder for this same cookie.
+                    let rc = unsafe { sys::door_bind(fd) };
+                    debug_assert!(
+                        rc == 0,
+                        "door_bind failed on a private door; it will \
+                         not be served"
+                    );
+                }
+            }
+
+            // Park. This does not return: from here the kernel drives
+            // the thread, entering the server procedure when a call
+            // arrives.
+            //
+            // For a bound thread this joins THIS door's private pool.
+            // For an unbound one it joins the process-wide pool.
             //
             // Because it never returns, nothing after it runs and no
             // destructor on this frame is ever called. That is why
