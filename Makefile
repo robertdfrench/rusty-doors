@@ -128,3 +128,15 @@ hook: .git/hooks/pre-commit ##: Run 'make all' as a pre-commit hook
 
 .PHONY: help require-target labkey about sync build test test-loop format \
 	docs examples shell all publish hook
+
+# --- formal models --------------------------------------------------
+#
+# TLA+ specs for the parts where interleaving is the danger and testing
+# cannot reach. See specs/README.md.
+
+specs/tla2tools.jar:
+	curl -fSL -o $@ https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+
+%.check: specs/tla2tools.jar ##: Model-check a TLA+ spec, e.g. make specs/ForkRegistry.check
+	@$(banner)
+	@cd specs && java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC $(notdir $*).tla
