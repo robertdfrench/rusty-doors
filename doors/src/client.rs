@@ -204,6 +204,26 @@ impl Client<NoDescriptors> {
     /// fallible: the door has already told us it will not accept them,
     /// so there is no reason to let a caller build a client that can
     /// only ever fail.
+    ///
+    /// # It governs both directions
+    ///
+    /// The name points at sending. The consequence points the other
+    /// way as well: this is also the only way to get a client that can
+    /// **receive** a descriptor. A [`Client<NoDescriptors>`](Client)
+    /// that is handed one closes it and fails the call with
+    /// [`CallError::UnexpectedDescriptors`].
+    ///
+    /// So call this whenever the door may reply with a descriptor,
+    /// even if you never send one yourself.
+    ///
+    /// The same coin, from the server side: a door built with
+    /// [`refuse_descriptors`] can never return a descriptor to
+    /// anybody, because this method refuses such a door. A door that
+    /// wants to turn away incoming descriptors and still reply with
+    /// one should use [`max_descriptors(0)`] instead.
+    ///
+    /// [`refuse_descriptors`]: crate::DoorBuilder::refuse_descriptors
+    /// [`max_descriptors(0)`]: crate::DoorBuilder::max_descriptors
     pub fn with_descriptors(self) -> Result<Client<Descriptors>, Error> {
         let info = self.info()?;
         if info.attributes() & DOOR_REFUSE_DESC != 0 {

@@ -338,3 +338,64 @@ Worth saying, since the above is all complaints.
 - OmniOS r151058 (`SunOS 5.11 omnios-r151058-516f7694c9 i86pc`),
   2 vCPUs, 2 GB.
 - rustc 1.97.1 (OmniOS/151058).
+
+---
+
+# Response from the maintainers
+
+All five confirmed against `doors` 0.9.0 and fixed. Thank you — the
+report was accurate in every particular, and finding 1's diagnosis was
+correct down to the mechanism.
+
+| # | Status | Where |
+|---|---|---|
+| 1 | Fixed | `door_bind` before parking, private doors only |
+| 2 | Fixed | new `#[door(handback)]` shape |
+| 3 | Documented | four doc sites, plus a test pinning the workaround |
+| 4 | Fixed | `Door::as_sendable()` |
+| 5 | Improved | a once-per-process warning naming both types |
+
+**1.** Exactly as you diagnosed. `experiments/private_pool.c` shows it
+in C — the same program hangs without the bind and answers 20 of 20
+with it. The fix binds only `DOOR_PRIVATE` doors, because a bound
+thread serves that door and nothing else; binding a shared one would
+have starved every other door in the process.
+
+There was a wrinkle from inside: for a private door the creation
+function can be called *during* `door_create`, before there is a
+descriptor to bind to. The per-door table now carries the descriptor,
+the builder publishes it as soon as it has one, and the server thread
+waits on a condvar — bounded, because trading a hang under load for a
+hang at startup would be no improvement.
+
+`doors/tests/private_pool.rs` is the regression test. It discriminates:
+with the bind removed the two private-pool cases fail and the
+shared-pool case still passes.
+
+**2.** `#[door(handback)]`, with the signature you proposed. Note the
+reply carries at most 16 descriptors (`MAX_REPLY_DESCRIPTORS`) and
+anything past that is closed rather than sent — documented on the
+shape, since losing a descriptor silently would be a poor trade for the
+`__private` escape you were making.
+
+**3.** Documentation only; the behaviour is right and you said so. The
+trap is now spelled out on `refuse_descriptors`, `max_descriptors`,
+`with_descriptors` and both marker types, and
+`doors/tests/handback_without_refuse.rs` pins the `max_descriptors(0)`
+workaround so it cannot regress.
+
+**4.** `Door::as_sendable() -> Result<SentFd<'_>, Error>`. It returns
+`Result` rather than a bare `SentFd` so a door disowned by a `fork` can
+refuse, consistent with `detach` and `info`.
+
+**5.** With a constraint you could not have seen: `ServerFault` crosses
+the wire as a single discriminant byte, so it cannot carry a type name
+to the client. Instead the server prints once per process, naming both
+the type the state was registered as and the type the procedure asked
+for. Once, not per call, and through `write_all` rather than
+`eprintln!` — the latter panics if the write fails, and a panic there
+would unwind into the kernel's frame.
+
+Your "things that worked" section was the most useful part to receive.
+`Reply`'s unmapping, the `Rejected`/`Consumed` split and
+`SentFd::Shared` had never been exercised at that volume here.

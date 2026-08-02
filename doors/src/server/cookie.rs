@@ -16,7 +16,7 @@
 //!
 //! **Never dereference a cookie without going through the lookup.**
 //! Every path from a cookie to server state in this crate goes through
-//! [`resolve`], and resolution is allowed to fail. A failure becomes a
+//! `resolve_or_fault`, and resolution may fail. A failure becomes a
 //! `GOALS.md` §3.9 tag `2` reply carrying
 //! [`ServerFault::StateUnavailable`], and touches no memory at all.
 //!
@@ -70,6 +70,22 @@
 //! by every server thread and outlives the call, so that bound is
 //! needed anyway.
 //!
+//! # Two ways to miss, one reply
+//!
+//! A lookup can fail for two very different reasons:
+//!
+//! 1. The state is gone. The door is being revoked, or its slot has
+//!    already been emptied. This is a race, and a normal one.
+//! 2. The state is right there, but it was asked for under a type it
+//!    was not stored under. This is a bug, and it fails *every* call
+//!    to that door, for the life of the process.
+//!
+//! The client sees the same thing either way, and it has to: a reply
+//! carries one status byte, and there is no room in it for a reason
+//! (`GOALS.md` §3.9). The type names only exist in the server process
+//! anyway. So case 2 is reported here, in the server, by
+//! `warn_type_mismatch` — once per process, on standard error.
+//!
 //! [`ServerFault::StateUnavailable`]: crate::error::ServerFault
 
 use crate::error::ServerFault;
@@ -77,6 +93,7 @@ use std::any::Any;
 use std::ffi::c_void;
 use std::fmt;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 // --------------------------------------------------------------------
@@ -105,6 +122,14 @@ const INDEX_MASK: usize = (1usize << INDEX_BITS) - 1;
 struct Slot {
     generation: usize,
     state: Option<Arc<dyn Any + Send + Sync>>,
+    /// The name of the type the state was installed as.
+    ///
+    /// `dyn Any` can say whether it is a `T`, but it cannot say what
+    /// it actually is. That name is the one thing a server author
+    /// needs to see when a lookup misses on the type, so it is kept
+    /// here, where it costs one `&'static str` per door and nothing at
+    /// all per call. Only meaningful while `state` is `Some`.
+    type_name: &'static str,
 }
 
 /// Every door in the process.
@@ -184,7 +209,10 @@ fn next_generation(current: usize) -> Option<usize> {
 /// If the process has more live doors than a slot number can count —
 /// over four billion on a 64-bit machine. That is an out-of-resources
 /// condition, like a failed allocation.
-fn slab_install(state: Arc<dyn Any + Send + Sync>) -> usize {
+fn slab_install(
+    state: Arc<dyn Any + Send + Sync>,
+    type_name: &'static str,
+) -> usize {
     let mut slab = write_slab();
 
     let index = match slab.free.pop() {
@@ -195,6 +223,7 @@ fn slab_install(state: Arc<dyn Any + Send + Sync>) -> usize {
             slab.slots.push(Slot {
                 generation: 1,
                 state: None,
+                type_name: "",
             });
             i
         }
@@ -202,12 +231,19 @@ fn slab_install(state: Arc<dyn Any + Send + Sync>) -> usize {
 
     let slot = &mut slab.slots[index];
     slot.state = Some(state);
+    slot.type_name = type_name;
     pack(index, slot.generation)
 }
 
 /// Look a cookie word up. Any word is allowed; a wrong one gives
 /// `None`.
-fn slab_resolve(word: usize) -> Option<Arc<dyn Any + Send + Sync>> {
+///
+/// Hands back the name of the type the state was installed as, along
+/// with the state itself. The caller needs it only when the downcast
+/// fails, and by then the lock is gone, so it is read here.
+fn slab_resolve(
+    word: usize,
+) -> Option<(Arc<dyn Any + Send + Sync>, &'static str)> {
     if word == 0 {
         return None;
     }
@@ -218,7 +254,8 @@ fn slab_resolve(word: usize) -> Option<Arc<dyn Any + Send + Sync>> {
     if slot.generation != generation {
         return None;
     }
-    slot.state.clone()
+    let state = slot.state.clone()?;
+    Some((state, slot.type_name))
 }
 
 /// Empty a slot, so every later resolve of that cookie says `None`.
@@ -289,7 +326,7 @@ impl<T> fmt::Debug for Ticket<T> {
 pub(crate) fn install<T: Send + Sync + 'static>(
     state: Arc<T>,
 ) -> (Ticket<T>, *mut c_void) {
-    let word = slab_install(state);
+    let word = slab_install(state, std::any::type_name::<T>());
     let ticket = Ticket {
         word,
         _state: PhantomData,
@@ -299,14 +336,19 @@ pub(crate) fn install<T: Send + Sync + 'static>(
 
 /// Read a cookie back into live state, if it still is live.
 ///
-/// Returns `None` when the state is gone. The caller MUST treat that
-/// as a §3.9 tag `2` reply and MUST NOT fall back to dereferencing the
-/// cookie itself.
+/// A cookie for a door that is gone fails. So does a cookie for a slot
+/// that has since been reused, and so does a cookie whose state is not
+/// a `T`. None of those read the cookie as an address.
 ///
-/// A cookie for a door that is gone resolves to `None`. So does a
-/// cookie for a slot that has since been reused, and so does a cookie
-/// whose state is not a `T`. None of those read the cookie as an
-/// address.
+/// The failure is spelled as the fault the client will see, because
+/// the trampoline has to answer the caller no matter what: a missing
+/// state is not an early return, it is a reply. The caller MUST treat
+/// it as a §3.9 tag `2` reply and MUST NOT fall back to dereferencing
+/// the cookie itself.
+///
+/// The two ways of missing are told apart here, because this is the
+/// last place that still knows which one happened. See the module
+/// docs, and [`warn_type_mismatch`].
 ///
 /// # Safety
 ///
@@ -314,31 +356,80 @@ pub(crate) fn install<T: Send + Sync + 'static>(
 /// because the word is only ever used as a number. The `unsafe` is
 /// kept so that the call sites — the trampoline, driven straight from
 /// the kernel — still have to say out loud what they are doing.
-pub(crate) unsafe fn resolve<T: Send + Sync + 'static>(
-    cookie: *mut c_void,
-) -> Option<Arc<T>> {
-    // No pointer is followed here. The cookie is only ever used as a
-    // number, which is why any word is safe to pass in.
-    let erased = slab_resolve(cookie as usize)?;
-    erased.downcast::<T>().ok()
-}
-
-/// [`resolve`], phrased the way the trampoline needs it.
-///
-/// The trampoline has to answer the caller no matter what, so a
-/// missing state is not an early return — it is a reply. This spells
-/// the failure as the fault the client will see.
-///
-/// # Safety
-///
-/// Same contract as [`resolve`].
 pub(crate) unsafe fn resolve_or_fault<T: Send + Sync + 'static>(
     cookie: *mut c_void,
 ) -> Result<Arc<T>, ServerFault> {
-    // SAFETY: we pass the cookie straight through and add no
-    // assumptions of our own.
-    let state = unsafe { resolve::<T>(cookie) };
-    state.ok_or(ServerFault::StateUnavailable)
+    // No pointer is followed here. The cookie is only ever used as a
+    // number, which is why any word is safe to pass in.
+    let Some((erased, installed_as)) = slab_resolve(cookie as usize) else {
+        // The slot is empty or has moved on. The state really is gone,
+        // which is a race with revoke and not a bug, so it is reported
+        // to the client and nowhere else.
+        return Err(ServerFault::StateUnavailable);
+    };
+
+    match erased.downcast::<T>() {
+        Ok(state) => Ok(state),
+        Err(_) => {
+            // The state is alive and well; we asked for it by the
+            // wrong name. Nothing the client learns can help here, so
+            // say it on this side.
+            warn_type_mismatch(installed_as, std::any::type_name::<T>());
+            Err(ServerFault::StateUnavailable)
+        }
+    }
+}
+
+/// Say, once, that a server procedure asked for its state by the wrong
+/// type.
+///
+/// # Why say anything
+///
+/// The client cannot be told. A reply carries a single status byte, so
+/// [`ServerFault::StateUnavailable`] is all the room there is
+/// (`GOALS.md` §3.9), and it reads as "the state went away" when in
+/// truth the state is sitting there under another name. The two type
+/// names exist only in this process, so this is the only place the
+/// difference can be pointed out at all.
+///
+/// # Why once, and only on standard error
+///
+/// A type mismatch fails every call. Printing per call would bury a
+/// busy server in identical lines, which is worse than the bug it is
+/// reporting. One line says everything the millionth would.
+///
+/// # Why not a panic, and not a `debug_assert!`
+///
+/// This runs on a door server thread, called from the kernel through
+/// an `extern "C"` frame. Unwinding out of one of those is undefined
+/// behaviour (`GOALS.md` §12.4), and the resolution happens before the
+/// `catch_unwind` that guards the user's function, so nothing would
+/// catch it. A `debug_assert!` is the same panic with a condition in
+/// front of it, and it would make debug and release builds fail
+/// differently at a point where the program is already wrong in both.
+///
+/// [`ServerFault::StateUnavailable`]: crate::error::ServerFault
+#[cold]
+fn warn_type_mismatch(installed_as: &str, asked_for: &str) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if WARNED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+
+    // `write_all`, not `eprintln!`: `eprintln!` panics if the write
+    // fails, and a panic here would unwind into the kernel's frame.
+    use std::io::Write as _;
+    let message = format!(
+        "doors: a door call could not find its state.\n  \
+         The state was registered as `{installed_as}`,\n  \
+         but the server procedure asked for `{asked_for}`.\n  \
+         State is looked up by type, so this misses, and every call to \
+         that door\n  fails with ServerFault::StateUnavailable. Name \
+         the same type in\n  `doors::__private::run::<S, ...>` as the \
+         one given to `Door::builder`.\n  \
+         (This is printed once per process.)\n"
+    );
+    let _ = std::io::stderr().write_all(message.as_bytes());
 }
 
 /// Take the state back out. Consumes the ticket.
@@ -376,7 +467,7 @@ mod tests {
         let (ticket, cookie) = install(state("pooled"));
 
         // SAFETY: the cookie is the one install just gave us.
-        let live = unsafe { resolve::<State>(cookie) };
+        let live = unsafe { resolve_or_fault::<State>(cookie) };
         assert_eq!(live.expect("still installed").name, "pooled");
 
         let back = uninstall(ticket);
@@ -384,17 +475,17 @@ mod tests {
     }
 
     /// The important one. A door that has been revoked leaves its
-    /// cookie behind in the kernel; that cookie must answer `None`
-    /// rather than point at freed state.
+    /// cookie behind in the kernel; that cookie must fail rather than
+    /// point at freed state.
     #[test]
-    fn resolve_after_uninstall_is_none() {
+    fn resolve_after_uninstall_fails() {
         let (ticket, cookie) = install(state("gone"));
         drop(uninstall(ticket));
 
-        // SAFETY: any word is safe to hand to resolve; that is the
+        // SAFETY: any word is safe to hand to the lookup; that is the
         // whole point of a cookie that is a number.
-        let dead = unsafe { resolve::<State>(cookie) };
-        assert!(dead.is_none(), "a retired cookie must not resolve");
+        let dead = unsafe { resolve_or_fault::<State>(cookie) };
+        assert!(dead.is_err(), "a retired cookie must not resolve");
     }
 
     /// Slot numbers get reused. The generation half of the cookie is
@@ -406,12 +497,12 @@ mod tests {
 
         let (second, fresh) = install(state("second"));
 
-        // SAFETY: resolve accepts any word.
-        let stale = unsafe { resolve::<State>(old) };
-        assert!(stale.is_none(), "the old cookie must not come back");
+        // SAFETY: the lookup accepts any word.
+        let stale = unsafe { resolve_or_fault::<State>(old) };
+        assert!(stale.is_err(), "the old cookie must not come back");
 
         // SAFETY: as above.
-        let live = unsafe { resolve::<State>(fresh) };
+        let live = unsafe { resolve_or_fault::<State>(fresh) };
         assert_eq!(live.expect("the new door works").name, "second");
 
         let _ = uninstall(second);
@@ -423,7 +514,7 @@ mod tests {
     /// would make the very first cookies for that slot live again.
     #[test]
     fn a_slot_that_runs_out_of_generations_is_retired() {
-        let word = slab_install(state("last"));
+        let word = slab_install(state("last"), std::any::type_name::<State>());
         let (index, _) = unpack(word);
 
         // Fast-forward this slot to its final generation. Only this
@@ -444,15 +535,31 @@ mod tests {
         assert!(!slab.free.contains(&index), "and is never handed out again");
     }
 
-    /// A cookie read as the wrong type is a `None`, not a
-    /// reinterpretation of somebody else's memory.
+    /// Asking for live state by the wrong type is the mistake that
+    /// costs people a day: it compiles, and then every call fails with
+    /// a fault that reads as "the state is gone".
+    ///
+    /// Three things must hold. The lookup must refuse, so it never
+    /// reinterprets somebody else's memory. The client must still see
+    /// a plain fault, because one status byte is all the wire has. And
+    /// the state must be untouched, so the right type still finds it —
+    /// which is what makes this a mismatch and not a loss.
     #[test]
-    fn a_wrong_type_resolves_to_none() {
-        let (ticket, cookie) = install(state("typed"));
+    fn a_wrong_type_is_a_fault_even_though_the_state_is_alive() {
+        let (ticket, cookie) = install(state("mismatched"));
 
-        // SAFETY: resolve accepts any word.
-        let wrong = unsafe { resolve::<u32>(cookie) };
-        assert!(wrong.is_none(), "downcast must refuse another type");
+        // SAFETY: the lookup accepts any word.
+        let fault = unsafe { resolve_or_fault::<u32>(cookie) };
+        assert_eq!(fault.unwrap_err(), ServerFault::StateUnavailable);
+
+        // The state itself is untouched, and the right type still
+        // finds it.
+        // SAFETY: as above.
+        let live = unsafe { resolve_or_fault::<State>(cookie) };
+        assert_eq!(
+            live.expect("the right type still works").name,
+            "mismatched"
+        );
 
         let _ = uninstall(ticket);
     }
@@ -462,7 +569,7 @@ mod tests {
         let (ticket, cookie) = install(state("fault"));
         let _ = uninstall(ticket);
 
-        // SAFETY: resolve accepts any word.
+        // SAFETY: the lookup accepts any word.
         let fault = unsafe { resolve_or_fault::<State>(cookie) };
         assert_eq!(fault.unwrap_err(), ServerFault::StateUnavailable);
     }
@@ -481,7 +588,8 @@ mod tests {
                 for _ in 0..500 {
                     // SAFETY: the ticket is still held on the main
                     // thread, so the slot is still ours.
-                    let got = unsafe { resolve::<State>(word as *mut _) };
+                    let got =
+                        unsafe { resolve_or_fault::<State>(word as *mut _) };
                     assert_eq!(got.expect("installed").name, "shared");
                 }
             }));

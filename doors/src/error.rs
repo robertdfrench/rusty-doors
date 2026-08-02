@@ -51,8 +51,34 @@ impl StatusTag {
 pub enum ServerFault {
     /// The server procedure panicked and `catch_unwind` caught it.
     Panicked,
-    /// The cookie could not be resolved to live server state. The door
-    /// is being revoked, or the slab entry is gone.
+    /// The cookie could not be resolved to live server state.
+    ///
+    /// Two different faults arrive here, and the client cannot tell
+    /// them apart. A reply carries one status byte (`GOALS.md` §3.9),
+    /// so there is no room on the wire for a reason.
+    ///
+    /// **1. The state is gone.** The door is being revoked, or its
+    /// slab entry has already been taken away. A call that was already
+    /// on its way in finds nothing to run against. This is a race, and
+    /// a normal one.
+    ///
+    /// **2. The state was asked for by the wrong type.** This is the
+    /// common one, and it does not read like this error at all.
+    ///
+    /// State is stored under the type it was built with, and looked up
+    /// by that type. `Door::builder(state)` fixes the type; a
+    /// hand-written server procedure that calls
+    /// `doors::__private::run::<S, ...>` has to name the same one. If
+    /// the door was built with `Door::builder(Arc::new(app))` and the
+    /// procedure says `run::<App, ...>`, the two do not match. Nothing
+    /// ties them together, so it compiles, and then the lookup misses
+    /// on **every** call, for the life of the process.
+    ///
+    /// The tell is that it never works, not even once. A revoke race
+    /// hits one call in thousands; a wrong type hits all of them.
+    ///
+    /// The server prints one line to standard error the first time
+    /// this happens, naming both types. Look there.
     StateUnavailable,
     /// The reply did not fit in the server's [`ReplyBuf`] and the hard
     /// cap refused to grow.
@@ -84,7 +110,11 @@ impl fmt::Display for ServerFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::Panicked => "the server procedure panicked",
-            Self::StateUnavailable => "the server state was unavailable",
+            Self::StateUnavailable => {
+                "the server could not find its state: either it was \
+                 dropped, or the server procedure asked for it by the \
+                 wrong type"
+            }
             Self::ReplyTooBig => "the reply exceeded the server's limit",
         };
         f.write_str(s)

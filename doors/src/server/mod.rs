@@ -15,11 +15,13 @@ pub use reply_buf::ReplyBuf;
 pub use request::{Request, UCred};
 pub use trampoline::ReplyProtocol;
 
+use crate::descriptor::SentFd;
 use crate::error::{Error, RevokeError};
 use crate::registry::{self, DoorInner};
 use crate::sys;
 use crate::types::{door_attr_t, door_info_t};
 use std::ffi::CString;
+use std::os::fd::BorrowedFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -110,7 +112,9 @@ pub(crate) fn door_info_for(fd: std::os::fd::RawFd) -> Result<DoorInfo, Error> {
 ///
 /// The descriptor is private. `Door` implements neither `AsRawFd` nor
 /// `IntoRawFd` (`GOALS.md` §12.6): handing it out would let someone
-/// close it while the registry still believed it was open.
+/// close it while the registry still believed it was open. To send
+/// this door to another process, use [`as_sendable`](Door::as_sendable),
+/// which lends the descriptor without giving it up.
 pub struct Door<S>
 where
     S: Send + Sync + 'static,
@@ -149,6 +153,90 @@ impl<S: Send + Sync + 'static> Door<S> {
     pub fn info(&self) -> Result<DoorInfo, Error> {
         self.guard()?;
         door_info_for(self.inner.raw_fd())
+    }
+
+    /// Borrow this door so it can be sent to another process.
+    ///
+    /// Sending a door means sending a file descriptor, so you need
+    /// something to send. This lends the door's descriptor for as long
+    /// as the returned value lives, and no longer.
+    ///
+    /// ```no_run
+    /// # use doors::{Client, Descriptors, Door};
+    /// # fn send_it<S: Send + Sync + 'static>(
+    /// #     door: &Door<S>,
+    /// #     peer: &Client<Descriptors>,
+    /// # ) -> Result<(), Box<dyn std::error::Error>> {
+    /// let lent = door.as_sendable()?;
+    /// peer.call_with_descriptors(b"here is my door", vec![lent])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # It lends. It does not give away
+    ///
+    /// The result is a [`SentFd::Shared`], which this crate never
+    /// closes, and it borrows from `&self`, so it cannot outlive the
+    /// `Door` it came from. While it is alive the borrow checker will
+    /// not let you revoke or drop that door.
+    ///
+    /// That is the difference from `AsRawFd`, which `Door` does not
+    /// implement and should not: a raw descriptor can be closed by
+    /// anybody holding it, and the fork registry would go on believing
+    /// the door was open (`GOALS.md` §12.6).
+    ///
+    /// # The door needs no path
+    ///
+    /// [`attach`](Door::attach) exists so that other programs can find
+    /// a door by name. A door you hand over yourself does not need a
+    /// name, so this works on a door that was never attached.
+    ///
+    /// # Do not carry the borrow across a `fork`
+    ///
+    /// A `fork` closes the child's copy of every server door
+    /// (`GOALS.md` §7.2). A borrow taken before the fork does not know
+    /// that. Take it after.
+    ///
+    /// # Why it can fail
+    ///
+    /// It refuses a door this process no longer owns. That is what
+    /// [`info`](Door::info), [`attach`](Door::attach) and
+    /// [`detach`](Door::detach) already do, with the same error, and a
+    /// new method that quietly said yes would be the odd one out.
+    ///
+    /// Two reasons, either of which is enough on its own:
+    ///
+    /// * After a `fork` the child's descriptor is already closed, so
+    ///   there is nothing left to lend. Worse, the number is free
+    ///   again, so lending it could hand a peer whatever file has
+    ///   since taken that number.
+    /// * A disowned door is the parent's door. Passing it on would be
+    ///   giving away something that is not ours to give.
+    ///
+    /// This is why the return type is a `Result` and not a bare
+    /// [`SentFd`]. A bare `SentFd` has no way to say no, and there is
+    /// a real case where the answer must be no.
+    pub fn as_sendable(&self) -> Result<SentFd<'_>, Error> {
+        self.guard()?;
+
+        let fd = self.inner.raw_fd();
+        if fd < 0 {
+            // The guard passed, but the descriptor is already gone.
+            // Only teardown and the atfork child handler leave -1
+            // behind, and both mean this door is finished.
+            return Err(Error::Disowned);
+        }
+
+        // SAFETY: `fd` is this door's own descriptor, and it is not
+        // -1, which `BorrowedFd::borrow_raw` forbids. It stays open
+        // for the whole life of the borrow. `Door::drop` and
+        // `Door::revoke` are the only places in this process that
+        // close it, and both need the `Door` itself, which is borrowed
+        // here. The atfork child handler also closes it, but only in a
+        // child process, and the doc comment above tells callers not
+        // to carry a borrow across a `fork`.
+        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+        Ok(SentFd::Shared(borrowed))
     }
 
     /// Make the door reachable at a path.

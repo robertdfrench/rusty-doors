@@ -20,6 +20,9 @@ mod sealed {
 /// `Request<'_, NoDescriptors>` has no method that reads one, so the
 /// mistake is a compile error rather than a check someone can forget.
 ///
+/// One policy covers both directions. A client that never sends a
+/// descriptor still needs [`Descriptors`] to receive one.
+///
 /// Sealed: the two implementors below are the only ones.
 ///
 /// [`Client`]: crate::Client
@@ -36,6 +39,17 @@ pub trait DescriptorPolicy: sealed::Sealed {
 /// Refusing is the default because accepting costs real cleanup: a
 /// descriptor that arrives unwanted still has to be closed, and a
 /// caller that forgets leaks a file descriptor per call.
+///
+/// This refuses both directions. The name sounds like "does not send
+/// descriptors", and it also means "cannot receive one": a
+/// `Client<NoDescriptors>` handed a descriptor closes it and fails the
+/// call with [`CallError::UnexpectedDescriptors`]. A client that only
+/// ever reads a descriptor out of a reply still needs
+/// [`Client::with_descriptors`].
+///
+/// [`CallError::UnexpectedDescriptors`]:
+///     crate::CallError::UnexpectedDescriptors
+/// [`Client::with_descriptors`]: crate::Client::with_descriptors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NoDescriptors;
 
@@ -45,6 +59,17 @@ impl DescriptorPolicy for NoDescriptors {
 }
 
 /// Descriptors are accepted, and the holder is responsible for them.
+///
+/// Both directions again: this is what lets a client send a
+/// descriptor, and what lets it receive one. Most clients that need it
+/// need it only to read a descriptor out of the reply.
+///
+/// A door built with
+/// [`refuse_descriptors`](crate::DoorBuilder::refuse_descriptors) can
+/// never give a client this state, so it can never reply with a
+/// descriptor either. Use
+/// [`max_descriptors(0)`](crate::DoorBuilder::max_descriptors) to
+/// refuse incoming descriptors and still hand one back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Descriptors;
 

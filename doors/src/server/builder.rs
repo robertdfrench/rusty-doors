@@ -108,6 +108,19 @@ impl<S: Send + Sync + 'static> DoorBuilder<S> {
     /// Sets `DOOR_PARAM_DESC_MAX`. Zero means none, which is not the
     /// same as refusing them: see
     /// [`refuse_descriptors`](DoorBuilder::refuse_descriptors).
+    ///
+    /// # Zero is what you want if the door still replies with one
+    ///
+    /// A maximum of zero turns away incoming descriptors and leaves
+    /// the reply direction alone. The kernel rejects a call that
+    /// carries a descriptor before the server procedure runs, which is
+    /// the part that matters, and the door can still hand a descriptor
+    /// back.
+    ///
+    /// [`refuse_descriptors`](DoorBuilder::refuse_descriptors) cannot
+    /// do that. It blocks both directions, so no client of that door
+    /// can ever read a descriptor out of a reply. Use zero here
+    /// instead.
     pub fn max_descriptors(mut self, n: usize) -> Self {
         self.desc_max = Some(n);
         self.explicit_max_descriptors = true;
@@ -119,6 +132,33 @@ impl<S: Send + Sync + 'static> DoorBuilder<S> {
     /// Stronger than a maximum of zero. The kernel rejects the call
     /// before the server procedure runs, and a client can see the
     /// refusal in `door_info` before it even tries.
+    ///
+    /// # A door that returns a descriptor must not set this
+    ///
+    /// The name reads as if it were only about what a caller may
+    /// send. It is not. This one flag governs both directions.
+    ///
+    /// A client can only read a descriptor out of a reply if it is a
+    /// `Client<Descriptors>`, and the only way to get one of those is
+    /// [`Client::with_descriptors`]. That method asks the kernel about
+    /// the door first, and fails with [`Error::RefusesDescriptors`]
+    /// when this flag is set. So setting it here means no client can
+    /// ever receive what this door sends back.
+    ///
+    /// Nothing catches this at compile time. It arrives as every call
+    /// failing at run time, which is a long way from the cause.
+    ///
+    /// # What to use instead
+    ///
+    /// Use [`max_descriptors(0)`](DoorBuilder::max_descriptors). It
+    /// keeps the part that matters — the kernel rejects a call
+    /// carrying a descriptor before the server procedure runs — and it
+    /// leaves the reply direction working, because the door does not
+    /// carry `DOOR_REFUSE_DESC` and
+    /// [`Client::with_descriptors`] therefore succeeds.
+    ///
+    /// [`Client::with_descriptors`]: crate::Client::with_descriptors
+    /// [`Error::RefusesDescriptors`]: crate::Error::RefusesDescriptors
     pub fn refuse_descriptors(mut self) -> Self {
         self.attributes |= doors_sys::DOOR_REFUSE_DESC;
         self

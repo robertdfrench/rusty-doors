@@ -25,9 +25,9 @@ use syn::spanned::Spanned;
 use syn::{Attribute, Error, Expr, Ident, LitInt, Meta, Result, Token};
 
 /// Every keyword `#[door(...)]` understands, for error messages.
-const KEYWORDS: &str = "procedure, rpc, reply_buf, raw, refuse_desc, \
-     unref, unref_multi, private, untagged, request_size, \
-     max_descriptors";
+const KEYWORDS: &str = "procedure, rpc, reply_buf, handback, raw, \
+     refuse_desc, unref, unref_multi, private, untagged, \
+     request_size, max_descriptors";
 
 /// What kind of function the user wrote.
 ///
@@ -43,6 +43,27 @@ pub enum Shape {
     Rpc,
     /// `fn(&self, Request<'_, D>, &mut ReplyBuf) -> Result<(), E>`
     ReplyBuf,
+    /// `fn(&self, Request<'_, D>) -> Result<(Vec<u8>, Vec<OwnedFd>), E>`
+    ///
+    /// The same as [`Shape::Procedure`], except that the reply may
+    /// also carry descriptors. It is the only shape that can hand one
+    /// back.
+    ///
+    /// # A reply carries at most sixteen descriptors
+    ///
+    /// `doors` copies them into a fixed array of
+    /// `MAX_REPLY_DESCRIPTORS`, which is sixteen. Any descriptor past
+    /// that is closed, not sent, and the call still succeeds. So a
+    /// method that returns more than sixteen loses the extra ones with
+    /// no error anywhere. Return sixteen or fewer.
+    ///
+    /// # Do not add `refuse_desc`
+    ///
+    /// That flag stops descriptors in both directions, so no client
+    /// could read what this shape sends back. Use
+    /// `max_descriptors = 0` to turn away descriptors the *caller*
+    /// sends.
+    Handback,
     /// The C server procedure, passed through untouched.
     Raw,
 }
@@ -54,6 +75,7 @@ impl Shape {
             Shape::Procedure => "procedure",
             Shape::Rpc => "rpc",
             Shape::ReplyBuf => "reply_buf",
+            Shape::Handback => "handback",
             Shape::Raw => "raw",
         }
     }
@@ -63,6 +85,7 @@ impl Shape {
             "procedure" => Some(Shape::Procedure),
             "rpc" => Some(Shape::Rpc),
             "reply_buf" => Some(Shape::ReplyBuf),
+            "handback" => Some(Shape::Handback),
             "raw" => Some(Shape::Raw),
             _ => None,
         }
@@ -74,7 +97,7 @@ impl Shape {
     /// kernel knows nothing about `self`.
     pub fn arity(self) -> usize {
         match self {
-            Shape::Procedure | Shape::Rpc => 2,
+            Shape::Procedure | Shape::Rpc | Shape::Handback => 2,
             Shape::ReplyBuf => 3,
             Shape::Raw => 5,
         }
@@ -89,6 +112,10 @@ impl Shape {
             Shape::Rpc => "fn(&self, Req) -> Result<Resp, E>",
             Shape::ReplyBuf => {
                 "fn(&self, Request<'_, D>, &mut ReplyBuf) -> Result<(), E>"
+            }
+            Shape::Handback => {
+                "fn(&self, Request<'_, D>) \
+                 -> Result<(Vec<u8>, Vec<OwnedFd>), E>"
             }
             Shape::Raw => {
                 "extern \"C\" fn(*mut c_void, *mut c_char, usize, \

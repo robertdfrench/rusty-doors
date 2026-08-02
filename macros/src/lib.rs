@@ -58,6 +58,7 @@
 //! | `procedure` | `fn(&self, Request<'_, D>) -> Result<Vec<u8>, E>` |
 //! | `rpc` | `fn(&self, Req) -> Result<Resp, E>` |
 //! | `reply_buf` | `fn(&self, Request<'_, D>, &mut ReplyBuf) -> Result<(), E>` |
+//! | `handback` | `fn(&self, Request<'_, D>) -> Result<(Vec<u8>, Vec<OwnedFd>), E>` |
 //! | `raw` | the C server procedure, passed through untouched |
 //!
 //! Flags, in any combination:
@@ -72,6 +73,43 @@
 //!
 //! `DOOR_NO_CANCEL` is not an option. The builder always sets it, and
 //! there is no way to clear it.
+//!
+//! ## Sending descriptors back with `handback`
+//!
+//! `handback` is the one shape whose reply can carry descriptors. It
+//! is otherwise `procedure`: same arguments, and the bytes come back
+//! the same way.
+//!
+//! ```ignore
+//! #[door(handback, max_descriptors = 0)]
+//! fn stream(&self, req: Request<'_, Descriptors>)
+//!     -> Result<(Vec<u8>, Vec<OwnedFd>), std::io::Error>
+//! {
+//!     Ok((b"here".to_vec(), vec![self.open_log()?]))
+//! }
+//! ```
+//!
+//! Three things to know before you use it.
+//!
+//! **A reply carries at most sixteen descriptors.** `doors` copies
+//! them into a fixed array of `MAX_REPLY_DESCRIPTORS`, which is
+//! sixteen. Any descriptor past that is closed, not sent, and the call
+//! still succeeds. So returning more than sixteen loses the extra ones
+//! with no error anywhere. Return sixteen or fewer.
+//!
+//! **Do not add `refuse_desc`.** That flag stops descriptors in both
+//! directions, so no client of this door could read what it sends
+//! back. Use `max_descriptors = 0` when you want to turn away
+//! descriptors the *caller* sends: it leaves the reply direction
+//! working.
+//!
+//! **The caller has to ask for them too.** A client only reads
+//! descriptors out of a reply if it was built with
+//! `Client::with_descriptors()`. A plain client closes them and fails
+//! the call.
+//!
+//! An `Err` return sends no descriptors. There are none to send: the
+//! method returns a pair only when it succeeds.
 //!
 //! # Testing
 //!

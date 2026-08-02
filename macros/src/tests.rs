@@ -173,6 +173,95 @@ fn the_reply_buf_shape_lends_a_buffer() {
     assert!(has(&out, "build_hello"));
 }
 
+/// An `impl` with one `handback` method, marked however the caller
+/// likes. The return type is the pair the shape asks for.
+fn handback(attr: TokenStream) -> TokenStream {
+    expand(
+        TokenStream::new(),
+        quote! {
+            impl Greeter {
+                #[door #attr]
+                fn hello(
+                    &self,
+                    req: Request<'_, Descriptors>,
+                ) -> Result<(Vec<u8>, Vec<OwnedFd>), MyError> {
+                    todo!()
+                }
+            }
+        },
+    )
+}
+
+/// The keyword is understood, and the shape it picks builds an
+/// `Outcome` field by field. `Outcome::bytes` hard-codes an empty
+/// descriptor list, so seeing it here would mean the descriptors were
+/// dropped.
+#[test]
+fn the_handback_shape_returns_descriptors() {
+    let out = handback(quote!((handback)));
+
+    assert!(!rejected(&out));
+    assert!(has(&out, "build_hello"), "the constructor");
+    assert!(has(&out, "run"), "it calls the trampoline");
+    assert!(has(&out, "Outcome"), "it builds an Outcome");
+    assert!(has(&out, "descriptors"), "and fills the descriptors in");
+    assert!(!has(&out, "bytes"), "`Outcome::bytes` would drop them");
+}
+
+/// It is a shape, so it cannot share a method with another one.
+#[test]
+fn handback_with_another_shape_is_rejected() {
+    let out = handback(quote!((handback, procedure)));
+    assert!(rejected(&out));
+}
+
+#[test]
+fn handback_twice_is_rejected() {
+    let out = handback(quote!((handback, handback)));
+    assert!(rejected(&out));
+}
+
+/// Flags and parameters work on it like any other shape.
+#[test]
+fn handback_takes_the_ordinary_options() {
+    let out = handback(quote!((handback, max_descriptors = 0)));
+
+    assert!(!rejected(&out));
+    assert!(has(&out, "max_descriptors"));
+    assert!(has(&out, "check_builder_conflicts"));
+}
+
+/// `handback` and `procedure` take the same arguments, so counting
+/// them cannot tell the two apart. A method that forgot the
+/// descriptors is named here rather than inside generated code.
+#[test]
+fn a_handback_method_that_returns_only_bytes_is_rejected() {
+    let out = greeter(quote!((handback)));
+    assert!(rejected(&out));
+}
+
+/// A return type the macro cannot read is left to the compiler, which
+/// knows what an alias means and the macro does not.
+#[test]
+fn an_unreadable_handback_return_type_is_left_alone() {
+    let out = expand(
+        TokenStream::new(),
+        quote! {
+            impl Greeter {
+                #[door(handback)]
+                fn hello(
+                    &self,
+                    req: Request<'_, Descriptors>,
+                ) -> MyResult {
+                    todo!()
+                }
+            }
+        },
+    );
+
+    assert!(!rejected(&out));
+}
+
 /// `raw` is the C entry point already. No trampoline is written, and
 /// the method itself is what the door is built with.
 #[test]
@@ -770,6 +859,8 @@ fn the_output_always_parses() {
         greeter(quote!((rpc))),
         greeter(quote!((nonsense))),
         greeter(quote!((unref))),
+        greeter(quote!((handback))),
+        handback(quote!((handback))),
         expand(
             TokenStream::new(),
             quote!(

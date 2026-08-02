@@ -37,8 +37,8 @@ use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, ToTokens};
 use syn::spanned::Spanned;
 use syn::{
-    Attribute, Error, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, Result,
-    Type, Visibility,
+    Attribute, Error, FnArg, GenericArgument, Ident, ImplItem, ImplItemFn,
+    ItemImpl, PathArguments, Result, ReturnType, Signature, Type, Visibility,
 };
 
 /// The one module generated code is allowed to name.
@@ -307,7 +307,53 @@ fn check_signature(method: &ImplItemFn, opts: &DoorOptions) -> Result<()> {
         ));
     }
 
+    if shape == Shape::Handback {
+        check_handback_return(sig)?;
+    }
+
     Ok(())
+}
+
+/// Catch the one `handback` mistake worth naming here.
+///
+/// `handback` takes the same arguments as `procedure` and differs only
+/// in what it returns, so the arity check above cannot tell them
+/// apart. The easy slip is to write `Result<Vec<u8>, E>` and forget
+/// the descriptors. Generated code then takes that apart as a pair,
+/// and the compiler complains about a line the user never wrote.
+///
+/// Only a plainly wrong `Result<..>` is refused. A return type this
+/// cannot read — an alias of the user's own, say — is left to the
+/// compiler, which knows more about types than the macro ever will.
+fn check_handback_return(sig: &Signature) -> Result<()> {
+    let ReturnType::Type(_, ty) = &sig.output else {
+        return Ok(());
+    };
+    let Type::Path(path) = &**ty else {
+        return Ok(());
+    };
+    let Some(last) = path.path.segments.last() else {
+        return Ok(());
+    };
+    if last.ident != "Result" {
+        return Ok(());
+    }
+    let PathArguments::AngleBracketed(args) = &last.arguments else {
+        return Ok(());
+    };
+    let Some(GenericArgument::Type(ok)) = args.args.first() else {
+        return Ok(());
+    };
+    if matches!(ok, Type::Tuple(_)) {
+        return Ok(());
+    }
+
+    Err(Error::new(
+        ok.span(),
+        "a `#[door(handback)]` method returns the reply bytes and the \
+         descriptors together, as a pair: `Result<(Vec<u8>, \
+         Vec<OwnedFd>), E>`",
+    ))
 }
 
 /// Emit the extension trait and its implementation.
@@ -844,6 +890,36 @@ fn closure_body(self_ty: &Type, door: &DoorFn<'_>) -> TokenStream {
                             __DoorError::User(__e),
                         ),
                     ),
+                }
+            }
+        },
+
+        // The only shape whose reply can carry descriptors, and so the
+        // only one that builds an `Outcome` field by field.
+        // `Outcome::bytes` hard-codes an empty list, which is right for
+        // every other shape and wrong for this one.
+        //
+        // The trampoline owns what happens next. It moves the
+        // descriptors out of their `OwnedFd`s, sends them, and closes
+        // them by hand if `door_return` comes back. Nothing about that
+        // is repeated here.
+        //
+        // An `Err` sends no descriptors, because there are none: the
+        // user returned one value in that case, not a pair.
+        Shape::Handback => quote! {
+            {
+                #unref
+                match #self_ty::#name(__state, __request) {
+                    ::core::result::Result::Ok((__data, __fds)) => {
+                        #p::Outcome {
+                            data: ::core::result::Result::Ok(__data),
+                            descriptors: __fds,
+                        }
+                    }
+                    ::core::result::Result::Err(__e) => #p::Outcome {
+                        data: ::core::result::Result::Err(__e),
+                        descriptors: ::std::vec::Vec::new(),
+                    },
                 }
             }
         },
