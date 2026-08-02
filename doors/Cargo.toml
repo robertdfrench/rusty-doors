@@ -30,6 +30,24 @@ postcard = { version = "1", optional = true, default-features = false, features 
 
 [dev-dependencies]
 trybuild = "1.0"
+# The `kvstore` and `signer` examples derive Serialize/Deserialize and
+# call postcard themselves, so they need both crates in their own
+# right. The library's copies are optional and behind `rpc`, and an
+# example cannot borrow an optional dependency. The optional copy of
+# `serde` also has no `derive` feature.
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+# A door serving a key-value store with per-group access control, and
+# a client to drive it. Gated on `rpc` because they speak the same
+# serde-plus-postcard wire format that `#[door(rpc)]` produces.
+[[example]]
+name = "kvstore"
+required-features = ["rpc"]
+
+[[example]]
+name = "kvstore_client"
+required-features = ["rpc"]
 
 [package.metadata.docs.rs]
 all-features = true

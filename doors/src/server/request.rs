@@ -292,6 +292,60 @@ impl UCred<'_> {
         unsafe { sys::ucred_getrgid(self.raw) }
     }
 
+    /// The caller's supplementary groups.
+    ///
+    /// May be empty. A process can have no supplementary groups, and
+    /// this also returns an empty slice if `ucred_getgroups(3C)`
+    /// fails. Both cases mean the same thing to a caller: there is no
+    /// extra group here to match on. Neither one panics.
+    ///
+    /// The slice borrows from the `ucred_t` inside the [`Request`], so
+    /// it copies nothing and cannot outlive the credentials.
+    ///
+    /// This list does **not** contain [`egid`](UCred::egid). To ask
+    /// whether the caller is in a group, use
+    /// [`is_in_group`](UCred::is_in_group), which checks both places.
+    pub fn groups(&self) -> &[libc::gid_t] {
+        let mut ptr: *const libc::gid_t = std::ptr::null();
+
+        // SAFETY: `raw` is a live ucred_t we own for `'a`. The call
+        // only writes through `ptr`, which points at a local.
+        let n = unsafe { sys::ucred_getgroups(self.raw, &mut ptr) };
+
+        if n <= 0 || ptr.is_null() {
+            // -1 is failure, 0 is "no supplementary groups". An empty
+            // slice is the honest answer to both.
+            return &[];
+        }
+
+        // SAFETY: the call reported `n` groups, so `ptr` points at
+        // that many `gid_t` values. They belong to the ucred_t, we
+        // never free them, and the returned slice borrows `self`, so
+        // the ucred_t outlives the slice.
+        unsafe { std::slice::from_raw_parts(ptr, n as usize) }
+    }
+
+    /// Is the caller a member of this group?
+    ///
+    /// True when `gid` is the caller's effective group id **or** one
+    /// of its supplementary groups. Both count. On illumos a user
+    /// belongs to a group either way, so both have to be checked.
+    ///
+    /// Use this for an access check, not [`egid`](UCred::egid). Code
+    /// that compares only the effective group id says "no" to a user
+    /// who really is in the group. It denies access it should allow,
+    /// and it does so silently, which is hard to notice.
+    ///
+    /// ```ignore
+    /// // Allow anyone in group 12.
+    /// if req.peer()?.is_in_group(12) {
+    ///     // ...
+    /// }
+    /// ```
+    pub fn is_in_group(&self, gid: libc::gid_t) -> bool {
+        self.egid() == gid || self.groups().contains(&gid)
+    }
+
     /// The caller's process id.
     ///
     /// A pid is only useful while the caller is still blocked in

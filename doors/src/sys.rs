@@ -144,50 +144,58 @@ pub(crate) unsafe fn door_ucred(out: *mut *mut c_void) -> c_int {
     doors_sys::door_ucred(out as *mut *mut libc::ucred_t)
 }
 
+// The `ucred_*` accessors.
+//
+// These come straight from `libc`, which already declares the whole
+// `ucred(3C)` family for illumos. They are wrapped here only to take
+// the opaque `*mut c_void` the rest of the crate passes around, so
+// that a libc type does not end up in the fields of `Request`.
+//
+// This is a section header for the rest of the file, not documentation
+// for the one function below it, so it uses `//` and not `///`.
+
 /// `ucred_free(3C)`.
 pub(crate) unsafe fn ucred_free(u: *mut c_void) {
-    extern "C" {
-        fn ucred_free(u: *mut libc::ucred_t);
-    }
-    ucred_free(u as *mut libc::ucred_t)
+    libc::ucred_free(u as *mut libc::ucred_t)
 }
 
 /// `ucred_geteuid(3C)`.
 pub(crate) unsafe fn ucred_geteuid(u: *mut c_void) -> libc::uid_t {
-    extern "C" {
-        fn ucred_geteuid(u: *const libc::ucred_t) -> libc::uid_t;
-    }
-    ucred_geteuid(u as *const libc::ucred_t)
+    libc::ucred_geteuid(u as *const libc::ucred_t)
 }
 
 /// `ucred_getegid(3C)`.
 pub(crate) unsafe fn ucred_getegid(u: *mut c_void) -> libc::gid_t {
-    extern "C" {
-        fn ucred_getegid(u: *const libc::ucred_t) -> libc::gid_t;
-    }
-    ucred_getegid(u as *const libc::ucred_t)
+    libc::ucred_getegid(u as *const libc::ucred_t)
 }
 
 /// `ucred_getruid(3C)`.
 pub(crate) unsafe fn ucred_getruid(u: *mut c_void) -> libc::uid_t {
-    extern "C" {
-        fn ucred_getruid(u: *const libc::ucred_t) -> libc::uid_t;
-    }
-    ucred_getruid(u as *const libc::ucred_t)
+    libc::ucred_getruid(u as *const libc::ucred_t)
 }
 
 /// `ucred_getrgid(3C)`.
 pub(crate) unsafe fn ucred_getrgid(u: *mut c_void) -> libc::gid_t {
-    extern "C" {
-        fn ucred_getrgid(u: *const libc::ucred_t) -> libc::gid_t;
-    }
-    ucred_getrgid(u as *const libc::ucred_t)
+    libc::ucred_getrgid(u as *const libc::ucred_t)
+}
+
+/// `ucred_getgroups(3C)`.
+///
+/// Returns how many supplementary groups the credential carries, and
+/// writes a pointer to the group array into `out`. Returns -1 on
+/// failure, and then `out` means nothing.
+///
+/// The array belongs to the `ucred_t`. It must not be freed, and it
+/// dies with the `ucred_t`, so anything reading it has to keep that
+/// credential alive.
+pub(crate) unsafe fn ucred_getgroups(
+    u: *mut c_void,
+    out: *mut *const libc::gid_t,
+) -> c_int {
+    libc::ucred_getgroups(u as *const libc::ucred_t, out)
 }
 
 /// `ucred_getpid(3C)`.
 pub(crate) unsafe fn ucred_getpid(u: *mut c_void) -> libc::pid_t {
-    extern "C" {
-        fn ucred_getpid(u: *const libc::ucred_t) -> libc::pid_t;
-    }
-    ucred_getpid(u as *const libc::ucred_t)
+    libc::ucred_getpid(u as *const libc::ucred_t)
 }

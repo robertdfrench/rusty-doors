@@ -217,7 +217,15 @@ All options go in the per-method `#[door(...)]`. The outer
 Shape — at most one keyword; omitting all means `procedure`:
 
 - `procedure` — `fn(&self, Request<'_, D>) -> Result<Vec<u8>, E>`
-- `rpc` — `fn(&self, Req) -> Result<Resp, E>`, see §3.8
+- `rpc` — `fn(&self, Req) -> Result<Resp, E>`, see §3.8.
+  **Known gap:** this shape has no `Request`, so it cannot reach
+  `Request::peer()` and cannot learn who called it. A door that needs
+  the caller's credentials — which is most doors doing access control
+  — cannot use `rpc` today. `doors/examples/kvstore.rs` hit this and
+  had to fall back to the `procedure` shape with two lines of
+  `postcard`. The fix is a three-argument variant,
+  `fn(&self, Request<'_, D>, Req) -> Result<Resp, E>`, chosen when the
+  method takes three arguments.
 - `reply_buf` — `fn(&self, Request<'_, D>, &mut ReplyBuf) -> Result<(), E>`
 - `raw` — the C server-procedure signature, validated and emitted
   unchanged
