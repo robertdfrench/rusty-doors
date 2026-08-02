@@ -4,11 +4,10 @@
 
 //! Support code for `#[doors::server]`. Not a public API.
 //!
-//! Generated code refers only to paths inside this module
-//! (`GOALS.md` §3.7). That keeps two promises at once: the macro never
-//! depends on a name a user could shadow, and the real public API
-//! stays free to change without breaking code someone generated last
-//! year.
+//! Generated code refers only to paths inside this module. That keeps
+//! two promises at once: the macro never depends on a name a user
+//! could shadow, and the real public API stays free to change without
+//! breaking code someone generated last year.
 //!
 //! Nothing here is covered by semantic versioning. Do not use it
 //! directly.
@@ -46,7 +45,6 @@ pub use std::ffi::{c_char, c_uint, c_void};
 ///
 /// Silently picking one of the two values is the one thing we must not
 /// do: the door would then be created with limits nobody asked for.
-/// `GOALS.md` §3.6.
 pub fn check_builder_conflicts<S>(
     builder: &DoorBuilder<S>,
     request_size: bool,
@@ -108,7 +106,7 @@ pub mod attrs {
 /// Behind the `rpc` feature, so the base crate does not pull in
 /// `serde` for people who do not use it. `door-macros` never names
 /// `serde` or `postcard`; it emits calls to these two functions
-/// instead (`GOALS.md` §3.8).
+/// instead.
 #[cfg(feature = "rpc")]
 pub mod rpc {
     /// Decode a request body.

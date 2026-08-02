@@ -7,9 +7,11 @@
 //! Short names for the raw `doors-sys` types, so the rest of the
 //! crate does not spell `doors_sys::` at every use.
 //!
-//! Nothing here is public: `GOALS.md` §12.10 forbids a `door_desc_t`
-//! union from being visible above `doors-sys`, and §11.3 is settled
-//! against re-exporting the raw layer.
+//! Nothing here is public. A `door_desc_t` is a C union, and a union
+//! must not be visible above `doors-sys`: reading the wrong arm of it
+//! is unsafe, so it does not belong in a safe API. The raw layer is
+//! not re-exported either. Code that wants it depends on `doors-sys`
+//! directly.
 
 pub(crate) use doors_sys::{door_arg_t, door_attr_t, door_desc_t, door_info_t};
 

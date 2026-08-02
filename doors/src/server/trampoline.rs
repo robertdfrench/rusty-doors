@@ -36,12 +36,13 @@
 //!
 //! # If `door_return` does come back
 //!
-//! Then it failed, and we are still on the same frame. Rule 4.2.4 of
-//! `GOALS.md` says the reply descriptors may be re-wrapped and closed.
-//! That is not an assumption — `experiments/matrix.c` measures it: in
-//! every failure reachable from the safe API the descriptors survived
-//! and still referred to the same file. So closing them here is a
-//! single close, not a double one.
+//! Then it failed, and we are still on the same frame. The reply
+//! descriptors may be re-wrapped and closed. That is not an
+//! assumption: in every failure reachable from the safe API the
+//! descriptors survived and still referred to the same file. So
+//! closing them here is a single close, not a double one.
+//
+// Measured, not guessed: experiments/matrix.c in this repository.
 //!
 //! After that we try once more with an empty reply, to release the
 //! server thread politely. If even that fails there is nothing sane
@@ -72,17 +73,16 @@ pub const MAX_REPLY_DESCRIPTORS: usize = 16;
 ///
 /// Two peers that both use this crate can afford one extra byte in
 /// front of every reply. That byte is how the client tells "the
-/// server returned an error" from "the server returned these bytes"
-/// (`GOALS.md` §3.9).
+/// server returned an error" from "the server returned these bytes".
 ///
 /// A door server written in C never writes that byte, and a C client
 /// never reads it. If we always wrote it, this crate could only ever
 /// talk to itself. Doors are an operating system facility with other
 /// users, so the framing has to be a choice, made once, when the door
-/// is built (`GOALS.md` §6.5).
+/// is built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReplyProtocol {
-    /// Put the §3.9 status byte in front of every reply.
+    /// Put a status byte in front of every reply.
     ///
     /// The default. Keep it when the other side also uses this crate:
     /// it is what carries user errors, panics and a lost cookie back
@@ -109,14 +109,15 @@ pub enum ReplyProtocol {
 
 /// What a server procedure produced, before it becomes bytes.
 ///
-/// Kept separate from the reply encoding so that the shapes in
-/// `GOALS.md` §3.3 can each build one in their own way.
+/// Kept separate from the reply encoding so that every shape can
+/// build one in its own way.
 pub struct Outcome<E> {
     /// The reply payload, on success.
     pub data: Result<Vec<u8>, E>,
-    /// Descriptors to send back. The four shapes in §3.3 never set
-    /// this, but the trampoline handles it so that rule 4.2.4 is
-    /// implemented once, here, rather than in each future shape.
+    /// Descriptors to send back. Only the `handback` shape fills this
+    /// in, but the trampoline handles it so that the rules for a
+    /// failed `door_return` are implemented once, here, rather than in
+    /// each shape.
     pub descriptors: Vec<OwnedFd>,
 }
 
@@ -145,10 +146,10 @@ impl<E> Outcome<E> {
 /// # Panics
 ///
 /// Never. A panic in `f` is caught, because unwinding out of an
-/// `extern "C"` frame is undefined behaviour (`GOALS.md` §12.4).
-/// Under [`ReplyProtocol::Tagged`] the panic becomes a §3.9 tag 2
-/// reply; under [`ReplyProtocol::Untagged`] it becomes a reply of
-/// zero bytes, because an untagged reply has no way to say more.
+/// `extern "C"` frame is undefined behaviour. Under
+/// [`ReplyProtocol::Tagged`] the panic becomes a reply tagged as a
+/// server fault; under [`ReplyProtocol::Untagged`] it becomes a reply
+/// of zero bytes, because an untagged reply has no way to say more.
 //
 // Five of these arguments are not ours to pick. `cookie`, `argp`,
 // `arg_size`, `dp` and `n_desc` are the server procedure signature the
@@ -371,7 +372,7 @@ fn stage_descriptors(
 /// Write an infrastructure failure: a panic, a lost cookie, or a
 /// reply that did not fit.
 ///
-/// Tagged, this is a §3.9 tag 2 reply. It carries only the
+/// Tagged, this is a `StatusTag::Fault` reply. It carries only the
 /// discriminant. A panic message can contain anything the server had
 /// in scope, and the caller is on the other side of a trust boundary.
 ///
@@ -392,7 +393,7 @@ fn write_fault(out: &mut ReplyBuf, protocol: ReplyProtocol, f: ServerFault) {
 
 /// Write what the server procedure returned.
 ///
-/// Tagged, this is a §3.9 tag 0 or tag 1 reply.
+/// Tagged, this is a `StatusTag::Ok` or `StatusTag::UserError` reply.
 ///
 /// Untagged, the bytes go out on their own. An error goes out on its
 /// own too, with nothing to mark it as an error, because an untagged

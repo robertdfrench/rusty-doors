@@ -50,6 +50,37 @@
 //! # }
 //! ```
 //!
+//! # Calling a door somebody handed you
+//!
+//! A door can be passed from one process to another. When it arrives
+//! it is a descriptor, and there is no path to open, so
+//! [`Client::open`] is no use. Two ways in, for two situations:
+//!
+//! ```no_run
+//! use doors::{Client, Probably, Reply};
+//! use std::os::fd::OwnedFd;
+//!
+//! type Fallible<T> = Result<T, Box<dyn std::error::Error>>;
+//!
+//! // It came out of a door call. `from_received` takes the descriptor
+//! // in the type the kernel delivered it in, and checks it.
+//! fn adopt(reply: Reply) -> Fallible<Client> {
+//!     let arrived = reply.into_descriptors().pop().expect("a door");
+//!     Ok(Client::from_received(arrived)?)
+//! }
+//!
+//! // It came from somewhere else: inherited across an exec, passed
+//! // over a socket, named on the command line. Nothing has said what
+//! // it is, so ask. If it is not a door, the error hands the
+//! // descriptor back.
+//! fn adopt_unknown(fd: OwnedFd) -> Fallible<Client> {
+//!     Ok(Probably::new(fd).into_client()?)
+//! }
+//! ```
+//!
+//! To call a door without taking it over at all, use
+//! [`BorrowedClient`].
+//!
 //! # Serving a door
 //!
 //! ```ignore
@@ -102,13 +133,16 @@ pub mod server;
 #[doc(hidden)]
 pub mod __private;
 
-pub use client::{Client, DoorParams, Reply, Untagged};
+pub use client::{
+    BorrowedClient, Client, DoorParams, Probably, Reply, Untagged,
+};
 pub use descriptor::{
     DescAttributes, DescriptorPolicy, Descriptors, DoorId, NoDescriptors,
     ReceivedFd, SentFd,
 };
 pub use error::{
-    CallError, Error, ErrorReply, ReplyTooBig, RevokeError, ServerFault,
+    CallError, Error, ErrorReply, NotADoor, NotADoorReason, ReplyTooBig,
+    RevokeError, ServerFault,
 };
 pub use registry::{fork, ForkResult};
 pub use server::{
@@ -123,6 +157,76 @@ pub use doors_sys::Errno;
 
 /// Turn a Rust `impl` block into a door server.
 ///
-/// See the [crate docs](crate) for an example, and `GOALS.md` §3 for
-/// the full list of `#[door(...)]` options.
+/// Put `#[doors::server]` on the `impl` block. It takes no options of
+/// its own. Every method that should become a door gets a
+/// `#[door(...)]` of its own, and the macro writes a
+/// `build_<method>()` for each one. See the [crate docs](crate) for a
+/// worked example.
+///
+/// # Shapes
+///
+/// A server procedure can be written in several forms. They differ in
+/// what the function takes and returns: raw bytes, a serialised type,
+/// a buffer to write into, or bytes plus descriptors. That choice is
+/// the method's *shape*.
+///
+/// There is more than one because doors are used for very different
+/// jobs. Some servers just move bytes. Some want a Rust type in and a
+/// Rust type out, and would rather not write the encoding themselves.
+/// Some want to write straight into the reply buffer and never
+/// allocate. Some have to hand a file descriptor back. One signature
+/// could not serve all of those without being clumsy for every one of
+/// them.
+///
+/// Choose a shape with at most one keyword. When none is given the
+/// shape is `procedure`. Each shape generates its own
+/// `build_<method>()`.
+///
+/// | Keyword | Signature |
+/// |---|---|
+/// | `procedure` | `fn(&self, Request<'_, D>) -> Result<Vec<u8>, E>` |
+/// | `rpc` | `fn(&self, Req) -> Result<Resp, E>` |
+/// | `reply_buf` | `fn(&self, Request<'_, D>, &mut ReplyBuf) -> Result<(), E>` |
+/// | `handback` | `fn(&self, Request<'_, D>) -> Result<(Vec<u8>, Vec<OwnedFd>), E>` |
+/// | `raw` | the C server procedure, passed through untouched |
+///
+/// `D` is [`NoDescriptors`] when `refuse_desc` is set, and
+/// [`Descriptors`] otherwise. `handback` is the only shape whose reply
+/// can carry descriptors.
+///
+/// # Flags
+///
+/// Any combination, alongside the shape.
+///
+/// | Keyword | What it does |
+/// |---|---|
+/// | `refuse_desc` | The door refuses descriptors, in both directions. |
+/// | `unref` | Ask for an unreferenced notification. Needs an `on_unreferenced` method. |
+/// | `unref_multi` | The same, but repeated. |
+/// | `private` | Give this door its own pool of server threads. |
+/// | `untagged` | Reply with no status byte, for a caller that does not use this crate. |
+/// | `request_size = ..=8192` | The largest request accepted. |
+/// | `max_descriptors = 4` | The most descriptors one call may carry. |
+///
+/// `DOOR_NO_CANCEL` is not an option. The builder always sets it, and
+/// there is no way to clear it.
+///
+/// # Before you use `handback`
+///
+/// Three rules, because none of them fail in an obvious way:
+///
+/// - A reply carries at most sixteen descriptors. Any past that are
+///   closed, not sent, and the call still succeeds. Return sixteen or
+///   fewer.
+/// - Do not add `refuse_desc`. It stops descriptors in both
+///   directions, so no client could read what the door sends back. Use
+///   `max_descriptors = 0` to turn away descriptors the *caller*
+///   sends.
+/// - The caller has to ask for them too. A client only reads
+///   descriptors out of a reply if it was built with
+///   [`Client::with_descriptors`].
+///
+/// [`NoDescriptors`]: crate::NoDescriptors
+/// [`Descriptors`]: crate::Descriptors
+/// [`Client::with_descriptors`]: crate::Client::with_descriptors
 pub use door_macros::server;

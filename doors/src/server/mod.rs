@@ -77,12 +77,27 @@ impl DoorInfo {
 
 /// Ask the kernel about a door descriptor.
 pub(crate) fn door_info_for(fd: std::os::fd::RawFd) -> Result<DoorInfo, Error> {
+    door_info_errno(fd).map_err(|errno| Error::Sys {
+        call: "door_info",
+        errno,
+    })
+}
+
+/// Ask the kernel about a door descriptor, reporting the bare errno.
+///
+/// The same call as [`door_info_for`], without deciding what a failure
+/// means. Adopting a descriptor as a door uses this: there, a failure
+/// is not a system error to report but the answer to a question, and
+/// the errno is part of the answer.
+pub(crate) fn door_info_errno(
+    fd: std::os::fd::RawFd,
+) -> Result<DoorInfo, doors_sys::Errno> {
     // SAFETY: zeroed is a valid door_info_t and the kernel fills it in.
     let mut raw: door_info_t = unsafe { std::mem::zeroed() };
     // SAFETY: raw is live for the call.
     let rc = unsafe { sys::door_info(fd, &mut raw) };
     if rc < 0 {
-        return Err(Error::sys("door_info"));
+        return Err(crate::sys::last_errno());
     }
 
     // Copy each field out by value. door_info_t is packed, so `&raw.di_proc`
@@ -104,15 +119,15 @@ pub(crate) fn door_info_for(fd: std::os::fd::RawFd) -> Result<DoorInfo, Error> {
 /// to — but only if this process still owns it. After a `fork` the
 /// child holds a `Door` that refers to the parent's door, and tearing
 /// that down would remove a path the parent is still serving. See
-/// `GOALS.md` §7 and [`crate::fork`].
+/// [`crate::fork`].
 ///
 /// There is no separate "jamb" type. The attached paths live here,
 /// because they share the door's lifetime exactly: a path that
 /// outlived its door would be a path leading nowhere.
 ///
 /// The descriptor is private. `Door` implements neither `AsRawFd` nor
-/// `IntoRawFd` (`GOALS.md` §12.6): handing it out would let someone
-/// close it while the registry still believed it was open. To send
+/// `IntoRawFd`: handing it out would let someone close it while the
+/// registry still believed it was open. To send
 /// this door to another process, use [`as_sendable`](Door::as_sendable),
 /// which lends the descriptor without giving it up.
 pub struct Door<S>
@@ -183,7 +198,7 @@ impl<S: Send + Sync + 'static> Door<S> {
     /// That is the difference from `AsRawFd`, which `Door` does not
     /// implement and should not: a raw descriptor can be closed by
     /// anybody holding it, and the fork registry would go on believing
-    /// the door was open (`GOALS.md` §12.6).
+    /// the door was open.
     ///
     /// # The door needs no path
     ///
@@ -193,9 +208,8 @@ impl<S: Send + Sync + 'static> Door<S> {
     ///
     /// # Do not carry the borrow across a `fork`
     ///
-    /// A `fork` closes the child's copy of every server door
-    /// (`GOALS.md` §7.2). A borrow taken before the fork does not know
-    /// that. Take it after.
+    /// A `fork` closes the child's copy of every server door. A borrow
+    /// taken before the fork does not know that. Take it after.
     ///
     /// # Why it can fail
     ///

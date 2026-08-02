@@ -620,8 +620,16 @@ Descriptor handling, not optional:
 4. `Shared(BorrowedFd)` entries are never closed by the crate on any
    path.
 
-Errno mapping: `EFAULT` and `EBADF` → `Rejected`; `EINTR` →
+Errno mapping: `EFAULT`, `EBADF` and `ENOTSUP` → `Rejected`; `EINTR` →
 `Interrupted`; every other errno, documented or not → `Consumed`.
+
+`ENOTSUP` is on that list because it was measured, not assumed: sending
+a descriptor to a `DOOR_REFUSE_DESC` door fails with `ENOTSUP` and the
+kernel rejects before taking anything
+(`experiments/refuse_desc_errno.c`). An errno MUST NOT be added here on
+anything weaker than a measurement that compares file identity — a
+descriptor number can be closed and reissued, so `F_GETFD` succeeding
+proves nothing.
 
 `call` and `call_into` MUST NOT retry `EINTR`. `call_idempotent` is the
 only method that retries it, and its doc comment MUST say an interrupted

@@ -280,8 +280,7 @@ pub fn errno() -> c_int {
 ///
 /// Measured on OmniOS r151058, not assumed: when the kernel cannot
 /// deliver a reply descriptor to the client, the raw `door_return`
-/// returns `-1` and **leaves errno untouched**. See
-/// `experiments/README.md`.
+/// returns `-1` and **leaves errno untouched**.
 ///
 /// Since [`Errno`] cannot represent zero and this function must not
 /// fabricate a success, it reports `EINVAL` on that path. Callers that
@@ -296,8 +295,9 @@ pub fn errno() -> c_int {
 ///
 /// Crucially, **on success this function never returns, so nothing on
 /// the calling frame is ever dropped.** Callers must have released
-/// every destructor-bearing value before calling it. See `GOALS.md`
-/// §4.2.
+/// every destructor-bearing value before calling it. Anything still
+/// holding a heap allocation, a lock or a descriptor at this point
+/// leaks it.
 #[inline]
 pub unsafe fn door_return(
     data_ptr: *const c_char,

@@ -16,7 +16,7 @@
 //! - The child owns a `Door` value that looks alive. If the child drops
 //!   it, `Door::drop` would `door_revoke`, `fdetach` and `unlink` the
 //!   parent's door path. The parent's door would disappear because an
-//!   unrelated child exited (`GOALS.md` §12.8).
+//!   unrelated child exited.
 //!
 //! # The answer
 //!
@@ -36,7 +36,7 @@
 //! handler addresses become invalid and a later `fork` will jump into
 //! freed memory. That is a property of `pthread_atfork(3C)`, not
 //! something this module can fix, so there is deliberately no cargo
-//! feature to turn the handler off (`GOALS.md` §7.3).
+//! feature to turn the handler off.
 
 use crate::sys;
 use doors_sys::Errno;
@@ -80,7 +80,7 @@ pub(crate) struct DoorInner {
     /// A second, independent check. `vfork` and `forkall` do not run
     /// atfork handlers the way `fork` does, so `disowned` alone can be
     /// missed. Comparing pids catches those cases without needing any
-    /// handler to have run (`GOALS.md` §7.3).
+    /// handler to have run.
     pub(crate) owner_pid: libc::pid_t,
 
     /// How many calls are inside the server procedure right now.
@@ -365,9 +365,9 @@ pub(crate) fn register(inner: Arc<DoorInner>) -> usize {
 /// - `true` — the door belongs to this process, so `door_revoke(3C)`
 ///   is the release. **`door_revoke` closes the descriptor itself.**
 ///   It does not merely invalidate the door. So there is no `close`
-///   after it, and adding one back would be a double close: see
-///   `docs/DESIGN.md` Appendix E, where a second close shut a
-///   descriptor number another thread had just been given.
+///   after it, and adding one back would be a double close. We have
+///   seen that go wrong: the second close shut a descriptor number
+///   another thread had just been given.
 /// - `false` — a `fork` handed us a copy of a door the parent still
 ///   serves. Revoking would kill the parent's door, so a plain
 ///   `close(2)` is the release here. It drops our copy only.
@@ -386,7 +386,7 @@ pub(crate) fn register(inner: Arc<DoorInner>) -> usize {
 /// still says 7, and closes it — closing someone else's brand new
 /// file. Holding the lock across both steps makes that impossible,
 /// because the handler cannot start its walk until the entry and the
-/// descriptor agree again (`GOALS.md` §7.1, §12.11).
+/// descriptor agree again.
 ///
 /// Deregistration happens even when the door is disowned. A disowned
 /// door skips `door_revoke`, `fdetach` and `unlink` — those would

@@ -105,6 +105,25 @@ impl fmt::Display for DoorId {
 }
 
 /// What the kernel said about a descriptor it handed us.
+///
+/// # These bits cannot tell you it is a door
+///
+/// This is worth saying plainly, because the names invite the opposite
+/// reading.
+///
+/// [`is_descriptor`](DescAttributes::is_descriptor) is set on
+/// everything the kernel delivers: files, pipes, sockets, doors. The
+/// other bits are copied out of the door's own flags, and only when
+/// the descriptor really is a door. So `false` from any of them means
+/// two different things at once — "not a door" and "a door without
+/// that flag" — and there is no way to tell which.
+///
+/// A door created in another process with no attributes arrives
+/// carrying exactly one bit, the same one an ordinary pipe carries.
+///
+/// The only way to ask is `door_info(3C)`.
+/// [`Client::from_received`](crate::Client::from_received) and
+/// [`Probably`](crate::Probably) both make that call for you.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DescAttributes(door_attr_t);
 
@@ -113,17 +132,31 @@ impl DescAttributes {
         DescAttributes(raw)
     }
 
-    /// The descriptor is a door.
-    pub fn is_door(self) -> bool {
+    /// A descriptor is being passed here.
+    ///
+    /// `DOOR_DESCRIPTOR`, which means what it says and no more: this
+    /// slot carries a descriptor. It does **not** mean the descriptor
+    /// is a door. The kernel sets it on every descriptor that travels
+    /// through a door call.
+    ///
+    /// Measured, not assumed: `doors/tests/adopt_a_door.rs` sends a
+    /// plain file through a door and finds this bit set on it.
+    pub fn is_descriptor(self) -> bool {
         self.0 & DOOR_DESCRIPTOR != 0
     }
 
     /// The door is local to this process.
+    ///
+    /// Only ever true for a door. False also means "not a door", so it
+    /// cannot be used the other way round.
     pub fn is_local(self) -> bool {
         self.0 & DOOR_LOCAL != 0
     }
 
     /// The door has been revoked.
+    ///
+    /// Only ever true for a door. False also means "not a door", so a
+    /// descriptor that is not revoked here may not be a door at all.
     pub fn is_revoked(self) -> bool {
         self.0 & DOOR_REVOKED != 0
     }
@@ -143,7 +176,7 @@ impl fmt::Debug for DescAttributes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DescAttributes")
             .field("bits", &format_args!("{:#x}", self.0))
-            .field("door", &self.is_door())
+            .field("descriptor", &self.is_descriptor())
             .field("local", &self.is_local())
             .field("revoked", &self.is_revoked())
             .field("released", &self.was_released())
@@ -185,8 +218,8 @@ impl<'a> SentFd<'a> {
     /// Take this apart into the raw descriptor and its attributes,
     /// giving up any ownership we had.
     ///
-    /// Step 1 of the descriptor dance in `GOALS.md` §6.4: after this,
-    /// no `OwnedFd` for a `Released` descriptor exists anywhere, so
+    /// This is the first step of sending a descriptor. After it, no
+    /// `OwnedFd` for a `Released` descriptor exists anywhere, so
     /// whatever the kernel does with it cannot cause a double close.
     /// The caller becomes responsible for re-wrapping it if — and only
     /// if — the call was rejected outright.
@@ -207,7 +240,6 @@ impl<'a> SentFd<'a> {
 #[derive(Debug)]
 pub struct ReceivedFd {
     fd: OwnedFd,
-    door_id: Option<DoorId>,
     attributes: DescAttributes,
 }
 
@@ -224,14 +256,13 @@ impl ReceivedFd {
         // so taking a reference to one is undefined behaviour.
         let attributes = d.d_attributes;
         let raw = d.d_data.d_desc.d_descriptor;
-        let id = d.d_data.d_desc.d_id;
 
-        let attrs = DescAttributes::new(attributes);
+        // `d_id` is deliberately not read. It only means anything when
+        // the descriptor is a door, and nothing in this struct can say
+        // whether it is. See `door_id` below.
         ReceivedFd {
             fd: OwnedFd::from_raw_fd(raw),
-            // d_id only means anything when the descriptor is a door.
-            door_id: attrs.is_door().then(|| DoorId::new(id)),
-            attributes: attrs,
+            attributes: DescAttributes::new(attributes),
         }
     }
 
@@ -246,9 +277,25 @@ impl ReceivedFd {
         self.fd
     }
 
-    /// The door's unique id, when the descriptor is a door.
+    /// The door's unique id, when the descriptor really is a door.
+    ///
+    /// `None` means it is not a door, or the door has gone away.
+    ///
+    /// # It asks the kernel
+    ///
+    /// One `door_info(3C)` call, each time. That is the only honest
+    /// way. The `d_id` the kernel delivers alongside the descriptor is
+    /// meaningless unless the descriptor is a door, and nothing in
+    /// [`attributes`](ReceivedFd::attributes) says whether it is —
+    /// reading `d_id` anyway reported a door id of zero for an
+    /// ordinary file.
+    ///
+    /// So call this when you want the answer, not in a loop. The cost
+    /// falls only on callers who ask.
     pub fn door_id(&self) -> Option<DoorId> {
-        self.door_id
+        crate::server::door_info_errno(self.fd.as_raw_fd())
+            .ok()
+            .map(|info| DoorId::new(info.uniquifier()))
     }
 
     /// What the kernel said about it.

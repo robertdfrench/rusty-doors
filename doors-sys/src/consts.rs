@@ -141,8 +141,10 @@ pub const THR_DAEMON: c_long = 0x00000100;
 // <pthread.h>
 // ---------------------------------------------------------------------
 
-/// Argument to `pthread_setcancelstate`. Every door server thread sets
-/// this; see `GOALS.md` §5.5.
+/// Argument to `pthread_setcancelstate`. Every door server thread this
+/// crate makes sets this, because a cancelled server thread would
+/// abandon whatever the server procedure was in the middle of, with no
+/// way for anyone to tell.
 pub const PTHREAD_CANCEL_DISABLE: c_int = 0x01;
 
 /// The complement of [`PTHREAD_CANCEL_DISABLE`], for completeness.

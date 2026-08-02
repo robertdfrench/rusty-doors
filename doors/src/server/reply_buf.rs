@@ -6,11 +6,11 @@
 //!
 //! # Why this type exists
 //!
-//! `GOALS.md` §4.2 rule 2 says no value with a destructor may be alive
-//! when the trampoline calls `door_return`. That call does not come
-//! back when it works, so any clean-up code standing after it simply
-//! never runs. A `Vec<u8>` would have to be freed, so a `Vec` cannot be
-//! what holds the reply at that moment.
+//! No value with a destructor may be alive when the trampoline calls
+//! `door_return`. That call does not come back when it works, so any
+//! clean-up code standing after it simply never runs. A `Vec<u8>`
+//! would have to be freed, so a `Vec` cannot be what holds the reply
+//! at that moment.
 //!
 //! [`ReplyBuf`] is the answer. It has no destructor at all. The bytes
 //! sit either in an array inside the struct, or in a buffer that
@@ -24,7 +24,8 @@ use std::ptr;
 
 /// How many bytes fit inside the struct itself.
 ///
-/// `GOALS.md` §4.3 asks for 2 KiB unless measurement says otherwise.
+/// 2 KiB. Large enough that most replies never reach for the thread's
+/// spill buffer, small enough to sit on a server thread's stack.
 const INLINE: usize = 2048;
 
 /// The spill area for one thread.
@@ -45,10 +46,10 @@ struct Spill {
 /// Fallible on purpose. `vec![0u8; n]` panics on a capacity overflow
 /// and aborts when the allocator fails, and the limit that sizes it is
 /// chosen by the user. A panic here would unwind out of the generated
-/// `extern "C"` trampoline, which `GOALS.md` §12.4 forbids, and it
-/// would happen outside the `catch_unwind` that only wraps the user's
-/// own function. Refusing the buffer instead turns the same situation
-/// into a `ReplyTooBig` reply.
+/// `extern "C"` trampoline, which is undefined behaviour, and it would
+/// happen outside the `catch_unwind` that only wraps the user's own
+/// function. Refusing the buffer instead turns the same situation into
+/// a `ReplyTooBig` reply.
 fn zeroed(n: usize) -> Option<Vec<u8>> {
     let mut v = Vec::new();
     v.try_reserve_exact(n).ok()?;
@@ -422,8 +423,9 @@ impl Default for ReplyBuf {
 /// **Never returns `Err` and never panics.** A too-long reply is
 /// recorded with [`overflow`](ReplyBuf::overflow) instead. This is
 /// deliberate: `write!` turns any `Err` into a panic-shaped mess
-/// inside a `Display` impl, and a panic in a trampoline is exactly
-/// what `GOALS.md` §12.4 forbids. Check `overflow()` after writing.
+/// inside a `Display` impl, and a panic that unwinds out of a
+/// trampoline is undefined behaviour. Check `overflow()` after
+/// writing.
 impl fmt::Write for ReplyBuf {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         let _ = self.write_bytes(s.as_bytes());

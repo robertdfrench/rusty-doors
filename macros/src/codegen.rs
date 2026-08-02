@@ -27,7 +27,7 @@
 //!
 //! # Where the generated code may look
 //!
-//! Only at `doors::__private` (`GOALS.md` §3.7). Nothing else in
+//! Only at `doors::__private`. Nothing else in
 //! `doors` is named, `serde` and `postcard` are never named, and every
 //! call is written in full path form so that a trait the user happens
 //! to have imported cannot change what runs.
@@ -600,12 +600,12 @@ fn build_body(self_ty: &Type, door: &DoorFn<'_>) -> TokenStream {
 /// Their signature is exactly `door_server_procedure_t`. They do no
 /// work of their own: `doors::__private::run` owns the dangerous part,
 /// and these functions only hand it a closure. `run` never returns,
-/// which is what stops them from falling off their end
-/// (`GOALS.md` §4.2 rule 1).
+/// which is what stops them from falling off their end — and falling
+/// off the end of an `extern "C"` function is undefined behaviour.
 ///
 /// # Why there are three functions and not one
 ///
-/// A door reply is either tagged or untagged (`GOALS.md` §6.5), and
+/// A door reply is either tagged or untagged, and
 /// the kernel gives a server procedure five arguments of its own with
 /// no room for a sixth of ours. So the answer cannot be handed in at
 /// call time. There is one entry point per protocol instead, and
@@ -731,14 +731,15 @@ fn trampoline(
 /// `doors` implements `ErrorReply` for everything that is `Display`,
 /// so it needs no extra support from the library.
 ///
-/// On a tagged door the reply is a §3.9 tag `1` — "the server
-/// function returned an error". Tag `2` would describe an
-/// infrastructure failure more exactly, but only the trampoline itself
-/// can write a tag `2`, and by design a closure cannot.
+/// On a tagged door the reply carries the "user error" tag — "the
+/// server function returned an error". The "server fault" tag would
+/// describe an infrastructure failure more exactly, but only the
+/// trampoline itself can write that one, and by design a closure
+/// cannot.
 ///
 /// On an untagged door there is no tag, so this message goes back as
 /// the whole reply and the caller cannot tell it from data. That is
-/// the deal an untagged door makes (`GOALS.md` §6.5), and it is why a
+/// the deal an untagged door makes, and it is why a
 /// door serving a foreign peer should say what went wrong in its own
 /// reply format.
 fn wrapper_error() -> TokenStream {

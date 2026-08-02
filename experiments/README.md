@@ -155,3 +155,62 @@ table from door cookie to stack size, and the callback looks the cookie
 up in the `door_info_t` it is handed. The cookie is used as the key
 because it is the only value known before `door_create` returns, and
 the first server thread can be created during that call.
+
+## `private_pool.c` — does a `DOOR_PRIVATE` door need `door_bind`?
+
+The question: a door made with `DOOR_PRIVATE` has a pool of server
+threads of its own. **Does a thread have to call `door_bind(3C)` to
+join that pool, or is parking in `door_return(NULL, 0, NULL, 0)`
+enough?**
+
+It matters because the crate used to park without binding. If binding
+is required, then every private door in the crate was served by no
+threads at all, and the symptom would be a door that answers the calls
+already in flight and then stops.
+
+The program makes one `DOOR_PRIVATE` door, starts its server threads
+through `door_server_create`, and then makes 20 concurrent
+`door_call`s. The only difference between the two runs is one line in
+the server thread. A door that cannot be served blocks its callers for
+ever, so the whole run carries a 10-second `alarm`.
+
+| mode | server thread does | result |
+|---|---|---|
+| `nobind` | park only | `rc=142` — killed by the alarm |
+| `bind` | `door_bind`, then park | `calls=20 answered=20 returned=20`, `rc=0` |
+
+```sh
+gcc -m64 -Wall -o private_pool private_pool.c -lpthread
+```
+
+```
+mode=nobind  rc=142                            killed by a 10s alarm
+mode=bind    calls=20 answered=20 returned=20  rc=0
+```
+
+`rc=142` is `128 + 14`, the shell's way of saying `SIGALRM`. The
+`nobind` line stops after the mode, because the process never reached
+the line that prints the counts.
+
+### Conclusions
+
+**`door_bind` is required.** Without it not one call of the twenty came
+back, and not one reached the server procedure. `answered` never rose
+above zero, so the calls were not slow — the kernel had no thread to
+give them.
+
+A thread that parks without binding joins the **process-wide** pool.
+A `DOOR_PRIVATE` door is served *only* by threads bound to it, so it
+never sees that thread.
+
+This is what finding 1 in `DOORS-CRATE-FINDINGS.md` rests on, and why
+the crate's thread-creation callback now calls `door_bind` before it
+parks, for private doors only. Binding on a shared door would be the
+opposite mistake: it would take the thread out of the general pool and
+starve every other door in the process.
+
+One awkward consequence, which the crate has to work around: for a
+`DOOR_PRIVATE` door the creation function can run **during**
+`door_create`, before `door_create` has returned the descriptor there
+is to bind to. So the new thread has to wait for the builder to publish
+it.

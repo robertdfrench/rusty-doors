@@ -11,9 +11,9 @@ use std::os::fd::OwnedFd;
 
 /// The status byte that leads every trampoline reply.
 ///
-/// See `GOALS.md` §3.9. The server writes one of these, then the
-/// payload; the client reads it back and turns tags 1 and 2 into
-/// [`CallError::Server`] and [`CallError::ServerFailed`].
+/// The server writes one of these, then the payload; the client reads
+/// it back and turns tags 1 and 2 into [`CallError::Server`] and
+/// [`CallError::ServerFailed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum StatusTag {
@@ -54,8 +54,8 @@ pub enum ServerFault {
     /// The cookie could not be resolved to live server state.
     ///
     /// Two different faults arrive here, and the client cannot tell
-    /// them apart. A reply carries one status byte (`GOALS.md` §3.9),
-    /// so there is no room on the wire for a reason.
+    /// them apart. A reply carries one status byte, so there is no
+    /// room on the wire for a reason.
     ///
     /// **1. The state is gone.** The door is being revoked, or its
     /// slab entry has already been taken away. A call that was already
@@ -156,7 +156,8 @@ pub enum Error {
         errno: Errno,
     },
     /// The door was disowned by a `fork`, so this process must not act
-    /// on it. See `GOALS.md` §7.
+    /// on it. A child never inherits a working door; it must create
+    /// its own. See [`crate::fork`].
     Disowned,
     /// The door refuses descriptors, so
     /// [`Client::with_descriptors`](crate::Client::with_descriptors)
@@ -175,8 +176,8 @@ pub enum Error {
         needed: usize,
     },
     /// A limit was set both in `#[door(...)]` and on the builder, so
-    /// there is no way to tell which one was meant. See `GOALS.md`
-    /// §3.6.
+    /// there is no way to tell which one was meant. Set it in one
+    /// place only.
     OptionSetTwice {
         /// The name of the option, as it is spelled in `#[door(...)]`.
         option: &'static str,
@@ -300,12 +301,14 @@ pub enum CallError {
         /// How many bytes the reply needed.
         needed: usize,
     },
-    /// §3.9 tag 1: the server procedure returned `Err`.
+    /// The server procedure returned `Err`. Only a tagged reply can
+    /// say this.
     Server {
         /// The error's encoding, as the server wrote it.
         data: Vec<u8>,
     },
-    /// §3.9 tag 2: the server panicked or could not resolve its state.
+    /// The server panicked or could not resolve its state. Only a
+    /// tagged reply can say this.
     ServerFailed(ServerFault),
     /// The server sent a reply this crate cannot parse. Either it is
     /// not a `doors` server, or the two sides disagree about the
@@ -365,6 +368,119 @@ impl fmt::Display for CallError {
 }
 
 impl std::error::Error for CallError {}
+
+/// A descriptor was handed over as a door, and it was not one.
+///
+/// # It gives the descriptor back
+///
+/// This is the whole point of having its own type. The caller offered
+/// a descriptor and the offer was refused, so the descriptor is still
+/// theirs. Dropping it here would close a file they may still want,
+/// and that would be a worse outcome than the mistake that caused the
+/// refusal.
+///
+/// [`CallError::Rejected`] hands sent descriptors back for the same
+/// reason. This follows it.
+///
+/// ```no_run
+/// # use doors::{Client, Probably};
+/// # use std::os::fd::OwnedFd;
+/// # fn demo(fd: OwnedFd) -> OwnedFd {
+/// match Probably::new(fd).into_client() {
+///     Ok(client) => { /* it was a door */ todo!() }
+///     // Not a door. We still have the descriptor.
+///     Err(e) => e.fd,
+/// }
+/// # }
+/// ```
+///
+/// Note that turning this into a `Box<dyn Error>` — which `?` will do
+/// in a function returning one — drops the descriptor along with
+/// everything else. Take [`fd`](NotADoor::fd) out first if you want to
+/// keep it.
+#[derive(Debug)]
+pub struct NotADoor {
+    /// Your descriptor, returned. Still open, still yours.
+    pub fd: OwnedFd,
+    /// What was wrong with it.
+    pub reason: NotADoorReason,
+}
+
+impl NotADoor {
+    /// Take the descriptor back and throw the reason away.
+    pub fn into_fd(self) -> OwnedFd {
+        self.fd
+    }
+}
+
+impl fmt::Display for NotADoor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}; the descriptor was handed back", self.reason)
+    }
+}
+
+impl std::error::Error for NotADoor {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.reason)
+    }
+}
+
+/// Why a descriptor could not be used as a door.
+///
+/// Returned on its own by the borrowing constructors on
+/// [`BorrowedClient`], where there is no descriptor to hand back: the
+/// caller never gave one up. The owning constructors wrap it in
+/// [`NotADoor`], which does hand it back.
+///
+/// [`BorrowedClient`]: crate::BorrowedClient
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NotADoorReason {
+    /// It is not a door.
+    ///
+    /// `door_info(3C)` answers only for a door and fails with `EBADF`
+    /// for anything else, so that call is the test, and every
+    /// constructor makes it. The errno is what it reported.
+    ///
+    /// There is no cheaper test. The attributes the kernel delivers
+    /// with a descriptor cannot tell a door from a pipe; see
+    /// [`DescAttributes`](crate::DescAttributes).
+    NotADoor(Errno),
+    /// It is a door, but it has been revoked.
+    ///
+    /// A revoked door answers nothing. Every call to it fails. So the
+    /// descriptor comes back now, while the caller still has somewhere
+    /// to put it, rather than on the first call.
+    Revoked,
+    /// It is a live door, but it was created with `DOOR_REFUSE_DESC`,
+    /// and the caller asked for a client that carries descriptors.
+    ///
+    /// Only the descriptor-carrying constructors report this. A door
+    /// that refuses descriptors is perfectly good for plain calls.
+    RefusesDescriptors,
+}
+
+impl fmt::Display for NotADoorReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NotADoorReason::NotADoor(errno) => write!(
+                f,
+                "this descriptor is not a door: door_info failed with \
+                 errno {}",
+                errno.get()
+            ),
+            NotADoorReason::Revoked => {
+                f.write_str("this door has been revoked and answers nothing")
+            }
+            NotADoorReason::RefusesDescriptors => f.write_str(
+                "this door was created with DOOR_REFUSE_DESC, so it \
+                 cannot carry descriptors",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NotADoorReason {}
 
 /// A server error that can be written into a reply.
 ///

@@ -30,9 +30,9 @@ use std::ffi::{c_char, c_int, c_uint, c_void};
 /// Read this thread's errno, as a value that cannot be zero.
 ///
 /// A zero errno after a failed call means the callee did not set one.
-/// We report `EINVAL` rather than claim success; see
-/// `experiments/README.md`, where `door_return` is observed doing
-/// exactly that.
+/// We report `EINVAL` rather than claim success. `door_return` really
+/// does leave errno alone on one of its failure paths, so this is not
+/// a theoretical worry.
 pub(crate) fn last_errno() -> Errno {
     let raw = doors_sys::errno();
     match Errno::new(raw) {

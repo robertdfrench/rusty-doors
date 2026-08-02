@@ -44,14 +44,30 @@
 //! marker: the compiler never sees it, because `#[doors::server]`
 //! reads it and takes it away.
 //!
-//! One macro rather than one per shape means the options can be
-//! checked against each other. `#[door(rpc, procedure)]` is a mistake
-//! we can name, where two separate macros would each be happy.
+//! One macro rather than one per kind of method means the options can
+//! be checked against each other. `#[door(rpc, procedure)]` is a
+//! mistake we can name, where two separate macros would each be happy.
 //!
 //! # Options
 //!
-//! A shape, at most one. It says what the method's signature is. When
-//! none is given the shape is `procedure`.
+//! ## Shapes
+//!
+//! A server procedure can be written in several forms. They differ in
+//! what the function takes and returns: raw bytes, a serialised type,
+//! a buffer to write into, or bytes plus descriptors. That choice is
+//! the method's *shape*.
+//!
+//! There is more than one because doors are used for very different
+//! jobs. Some servers just move bytes. Some want a Rust type in and a
+//! Rust type out, and would rather not write the encoding themselves.
+//! Some want to write straight into the reply buffer and never
+//! allocate. Some have to hand a file descriptor back. One signature
+//! could not serve all of those without being clumsy for every one of
+//! them.
+//!
+//! A method takes at most one shape keyword. When none is given the
+//! shape is `procedure`. Each shape generates its own
+//! `build_<method>()`.
 //!
 //! | Keyword | Signature |
 //! |---|---|
@@ -61,13 +77,17 @@
 //! | `handback` | `fn(&self, Request<'_, D>) -> Result<(Vec<u8>, Vec<OwnedFd>), E>` |
 //! | `raw` | the C server procedure, passed through untouched |
 //!
-//! Flags, in any combination:
+//! ## Flags
+//!
+//! Any combination, alongside the shape:
 //!
 //! - `refuse_desc` — the door refuses descriptors. `D` becomes
 //!   `NoDescriptors`, which has no method that reaches one.
 //! - `unref` — ask for an unreferenced notification.
 //! - `unref_multi` — ask for repeated ones.
 //! - `private` — give this door its own pool of server threads.
+//! - `untagged` — reply with no status byte in front, for a caller
+//!   that does not use this crate.
 //! - `request_size = ..=8192` — the largest request accepted.
 //! - `max_descriptors = 4` — the most descriptors one call may carry.
 //!

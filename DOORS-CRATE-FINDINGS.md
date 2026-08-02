@@ -1,401 +1,224 @@
-# Findings against the `doors` crate
+# Notes on the `doors` crate, from a consumer
 
-Written for the `rusty-doors` maintainers. Everything here came out of
-building a real door-based web server against `doors` 0.9.0 — six
-variants of a streaming transport, measured over 101 benchmark runs on
-an OmniOS r151058 guest. See `README.md` for what that program is; none
-of it matters for the report below except that it is an ordinary
-consumer of the crate doing an ordinary thing.
+Written for the `rusty-doors` maintainers.
 
-Two bugs and three design gaps, in descending order of how much they
-cost to work around.
+All of this comes from building a real web server on the crate. Six
+different ways of streaming Server-Sent Events out of a door, measured
+over 101 benchmark runs on OmniOS r151058. None of that matters below,
+except that it is an ordinary program doing an ordinary thing, at a
+scale that finds problems: 50,000 streams at once, and roughly ten
+million door calls.
 
-| # | What | Severity |
-|---|------|----------|
-| 1 | `private_pool()` builds a door that cannot be served | **Bug.** Silent; presents as a hang. |
-| 2 | No shape can return a descriptor | Gap. Forces `__private`. |
-| 3 | `DOOR_REFUSE_DESC` and descriptor handback are mutually exclusive | Gap. Not documented. |
-| 4 | Neither `Door` nor `Client` can lend its descriptor | Gap. Forces `open(2)` on your own path. |
-| 5 | `run::<S, …>` must match the builder's `S` or every call fails | Papercut. Error says nothing. |
+There are two parts. The first five findings were reported earlier and
+have been fixed. We have since moved our code onto those fixes, so this
+version also reports how that went. Then there are three new findings.
 
 ---
 
-## 1. `DoorBuilder::private_pool()` produces a door that cannot be served
+## Part one: the five earlier findings are fixed
 
-**This is the one worth fixing first.** It fails silently, at run time,
-under load, and the symptom points nowhere near the cause.
+Fixed in `6a9a161` and `d57e567`. We checked each against the code
+rather than the commit message, then rebuilt our program against the
+new crate and ran it.
 
-### What happens
+| # | What it was | Fixed by | How we checked |
+|---|---|---|---|
+| 1 | `private_pool()` built a door that could not be served | `door_bind` is now called, for private doors only | **Re-ran the test that failed.** It now serves 1,000 streams out of 1,000, and 914,992 events a second. Before, it served two streams and delivered nothing at all. |
+| 2 | No shape could return an fd | New `#[door(handback)]` | **Rewrote our server to use it.** All six of our designs still pass end to end. |
+| 3 | `DOOR_REFUSE_DESC` and replying with an fd are mutually exclusive | Documented in four places | Read it. There is also a new test, `handback_without_refuse.rs`, pinning the `max_descriptors(0)` workaround. |
+| 4 | Nothing could lend its own door | `Door::as_sendable()` | **Now using it.** It replaced an `open` on our own attached path. |
+| 5 | Wrong state type gave an error that said nothing | A warning naming both types, once per process | Read it. The error that crosses the wire is one byte and cannot carry a type name, so warning on the server side is the right call. |
+
+### The important one: we no longer touch your internals
+
+Before, our application server had to register a raw C entry point and
+call `doors::__private::run` itself, because no shape could return an
+fd. Nothing in our tree does that now.
+
+`#[door(handback)]` replaced it exactly. Two raw `extern "C"` functions
+and about sixty lines of argument shuffling became two ordinary
+methods. The code got shorter and safer at the same time.
+
+That was the most valuable of the five fixes for us. Thank you.
+
+### `as_sendable` works well
+
+We expected trouble here and did not find any.
+
+The door has to be lent from a worker thread, and that thread reaches
+it through the same shared state the door itself holds. We thought that
+might not be possible. It is. `Door<S>` is both `Send` and `Sync`,
+which we confirmed with a compile-time assertion rather than assuming.
+
+The only care needed is to hold a `Weak` rather than an `Arc` in the
+door's own state, so the two do not keep each other alive forever. That
+is ordinary Rust and not your problem.
+
+Returning a borrow rather than an owned fd is the right choice. It made
+it impossible for us to get the lifetime wrong.
+
+### One thing still to consider, on fix 1
+
+The bind result is checked with `debug_assert!`, and the wait for the
+door's own fd is bounded, with a comment saying the thread parks
+unbound if it never arrives.
+
+Both of those are silent in a release build. The symptom of either is
+exactly the bug that was just fixed: a door that answers a call or two
+and then stops, with nothing logged anywhere.
+
+Anything at all on that path would turn "broken" into "broken and
+traceable". That is the argument the crate makes elsewhere about
+failures which arrive as silence, and it applies here too.
+
+---
+
+## Part two: three new findings
+
+### 6. A door you were given cannot be called safely
+
+This is the other half of finding 4, and it is the half still open.
+
+Finding 4 was that a process could not lend its own door. Fixed. But a
+process that *receives* a door still cannot call it through the safe
+API, because a `Client` can only be built from a path:
 
 ```rust
-let mut door = Door::builder(state)
-    .request_size(0..=256)
-    .private_pool()          // <-- this
-    .thread_stack_size(256 * 1024)
-    .build(my_proc)?;
-door.attach("/tmp/my.door")?;
+Client::open(path)             // the only way in
+Client::open_inheritable(path)
 ```
 
-The door attaches. `Client::open` succeeds. The first call or two are
-served. Then the door stops answering and callers block in `door_call`
-indefinitely.
-
-Measured, with the web server making one door call per HTTP request —
-so "streams established" is the number of door calls that returned:
-
-| | shared pool | `private_pool()` |
-|---|---|---|
-| connections opened | 1,000 | 1,000 |
-| **streams established** | **1,000** | **2** |
-| events delivered in 20 s | 10,137,642 | **0** |
-
-The same shape for a door called once per *event* rather than once per
-stream (our A4 variant): 1,402,985 events against **0**, and again
-exactly two streams established.
-
-Both processes were healthy throughout and shut down normally. Nothing
-logged an error. The door was simply not answering.
-
-### Why
-
-`door_create(3C)` with `DOOR_PRIVATE` gives the door its own pool of
-server threads. A thread joins a *private* pool by calling
-`door_bind(3C)` with that door's descriptor and *then* parking in
-`door_return(NULL, 0, NULL, 0)`. A thread that parks without binding
-joins the **process-wide** pool instead.
-
-`create_server_thread` in `doors/src/server/builder.rs` parks without
-binding:
+A door that arrives in a request arrives as an fd. There is no path. So
+the receiver has to drop to `doors-sys` and call `door_call` by hand:
 
 ```rust
-unsafe extern "C" fn create_server_thread(info: *mut door_info_t) {
-    // ...
-    let _ = std::thread::Builder::new()
-        .stack_size(stack)
-        .name(String::from("door-server"))
-        .spawn(move || {
-            unsafe {
-                sys::pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,
-                                            std::ptr::null_mut());
-            }
-            // Join the door's pool of waiting threads. ...
-            unsafe {
-                sys::door_return(std::ptr::null(), 0,
-                                 std::ptr::null(), 0);   // <-- no door_bind
-            }
-        });
+let mut arg = doors_sys::door_arg_t { /* ... */ };
+let r = unsafe { doors_sys::door_call(fd, &mut arg) };
+```
+
+This is not as bad as reaching into `__private`. `doors-sys` is a
+published crate and this is its stated purpose. But every safety
+property the crate exists to provide is gone on that path. We are back
+to laying out `door_arg_t` by hand, sizing the reply buffer ourselves,
+and remembering that the status byte is there and has to be skipped.
+
+It matters more than it may look, because passing a door in a request
+is not exotic. It is how you build anything where the two sides call
+each other. For us it is the whole design of the one option that
+reaches 50,000 streams.
+
+**What would fix it:** a constructor from a received fd.
+
+```rust
+impl Client<NoDescriptors> {
+    /// Take ownership of a door that arrived in a request.
+    ///
+    /// Fails if the fd is not a door.
+    pub fn from_received(fd: ReceivedFd) -> Result<Self, Error>;
 }
 ```
 
-The comment says "join the door's pool". It joins *a* pool — the global
-one. So a `DOOR_PRIVATE` door receives none of the threads created for
-it, and is served only by whatever thread happened to be bound when it
-was created. That is where the "2" in the table comes from.
+`ReceivedFd` already records whether the kernel said the fd is a door,
+in `attributes().is_door()`. So the check is available, and the wrong
+kind of fd can be refused rather than called.
 
-`door_bind` is already declared in `doors-sys`:
+A borrowing form would help too. The common case is calling the same
+door many times without owning it.
+
+### 7. The published documentation cites a file that is not published
+
+There are 44 references to `GOALS.md` in doc comments that ship. They
+sit on public items, including this one on the `server` macro, which is
+among the first things anybody reads:
 
 ```
-doors-sys/src/ffi.rs:117:  /// See [`door_bind(3C)`][1].
+/// See the [crate docs](crate) for an example, and `GOALS.md` §3 for
+/// the full list of `#[door(...)]` options.
 ```
 
-and has **no caller anywhere in the safe layer**:
+`GOALS.md` is at the workspace root, not inside `doors/`, so
+`cargo publish` does not include it. A reader on docs.rs is sent to a
+file they cannot obtain, for the full list of options, which is
+something they actually need.
 
-```console
-$ grep -rn door_bind doors/src/
-$ echo $?
-1
+Inside the source these citations are useful and should stay. The ones
+in `///` and `//!` comments are a different thing. Those are the
+published manual.
+
+Two ways out. Move the substance into the doc comment, so the reader
+gets the list instead of a reference to it. Or ship the file. The first
+is better: a section number in a design document is not an answer to
+"what are my options".
+
+We had this exact problem in our own report, and it was raised by a
+reader who could not follow any of it. Citing a document nobody else
+has reads as writing for the person who already knows.
+
+### 8. "Shape" is never defined
+
+`shape` is your word for which kind of function a server procedure is.
+It appears in the attribute keywords, in error messages, and throughout
+the documentation:
+
+```
+procedure, rpc, reply_buf, handback, raw
 ```
 
-### The information the creation function needs is already there
+We could not find anywhere that says what a shape is. The word is used
+as though the reader already knows. We worked it out by reading
+`macros/src/options.rs`, which most users will not do.
 
-`create_server_thread` receives `*mut door_info_t`, and `di_data` is
-already read out of it to look up the stack size. The same cookie could
-carry the door's descriptor, which is what `door_bind` wants.
+It reaches users in at least three places: the `#[door(...)]`
+attribute, the error when two are given at once, and the sentence
+describing the expected signature when the argument count is wrong.
 
-### Suggested fixes, cheapest first
+**What would fix it:** one paragraph in the crate documentation, near
+the first use, saying what varies between shapes and why there is more
+than one. Roughly:
 
-1. **Make `private_pool()` refuse to build.** One line, honest, and
-   strictly better than the status quo: a compile-or-build-time error
-   beats a hang under load. Document that private pools are not
-   supported yet.
-2. **Bind.** Thread the door's descriptor through the cookie and call
-   `door_bind(fd)` before `door_return` when the door has
-   `DOOR_PRIVATE` set. Note that a bound thread serves only that door,
-   so a process with both private and shared doors needs the creation
-   function to distinguish them — which the `door_info_t` argument
-   makes possible.
-3. Either way, `experiments/` would be the natural home for a small C
-   program that demonstrates the difference, in the style of
-   `servercreate.c`.
+> A server procedure can be written in several forms. They differ in
+> what the function takes and returns: raw bytes, a serialised type, a
+> buffer to write into, or bytes plus fds. Choose one with
+> `#[door(procedure)]`, `#[door(rpc)]`, `#[door(reply_buf)]`,
+> `#[door(handback)]` or `#[door(raw)]`. Each generates its own
+> `build_<method>()`.
 
-### Reproducing it
-
-Any door built with `.private_pool()` and driven with more concurrency
-than one call at a time. In this repository:
-
-```sh
-cd ~/portunusd
-./target/release/appserver --variant A0 --private-pool \
-    --door /tmp/portunusd.door &
-./target/release/webserver --variant A0 --door /tmp/portunusd.door \
-    --port 8080 &
-./target/release/loadgen --host 127.0.0.1 --port 8080 --streams 1000 \
-    --duration-s 20 --out /tmp/load.json
-# events: 0; the web server reports "teardown of 2 streams"
-```
+The idea is good and worth keeping. It just needs introducing once.
 
 ---
 
-## 2. No `#[doors::server]` shape can return a descriptor
+## What worked, unprompted
 
-`Outcome` has the field:
+Worth saying, since everything above is a problem.
 
-```rust
-pub struct Outcome<E> {
-    pub data: Result<Vec<u8>, E>,
-    /// Descriptors to send back. The four shapes in §3.3 never set
-    /// this, but the trampoline handles it so that rule 4.2.4 is
-    /// implemented once, here, rather than in each future shape.
-    pub descriptors: Vec<OwnedFd>,
-}
-```
-
-The trampoline handles reply descriptors properly, including the
-rule-4.2.4 re-wrap on the paths where `door_return` comes back. But
-every one of the four generated shapes calls `Outcome::bytes`, which
-hard-codes `descriptors: Vec::new()`, and `Outcome` is only reachable
-through `doors::__private`.
-
-So a server that hands a descriptor back — which is the whole design of
-the thing we were building, and a normal use of doors generally — has
-to register a raw `extern "C"` procedure and call
-`doors::__private::run` itself:
-
-```rust
-unsafe extern "C" fn stream_proc(
-    cookie: *mut c_void, argp: *mut c_char, arg_size: usize,
-    dp: *mut doors::__private::door_desc_t, n_desc: c_uint,
-) {
-    run::<Arc<App>, NoDescriptors, _, io::Error>(
-        cookie, argp, arg_size, dp, n_desc, 4096, ReplyProtocol::Tagged,
-        |app: &Arc<App>, req: Request<'_, NoDescriptors>| {
-            Outcome { data: Ok(reply_bytes), descriptors: vec![the_fd] }
-        },
-    )
-}
-```
-
-`__private` is documented as "not a public API" and "not covered by
-semantic versioning", so this is a program pinned to a patch release of
-the crate for want of a shape.
-
-**Suggested fix:** a fifth shape. The signature that would have covered
-every case we hit:
-
-```rust
-#[door(handback)]
-fn stream(&self, req: Request<'_, D>)
-    -> Result<(Vec<u8>, Vec<OwnedFd>), E>
-```
-
-Everything underneath it already exists.
-
----
-
-## 3. `DOOR_REFUSE_DESC` and descriptor handback cannot be combined
-
-Our application's door does not *accept* descriptors — only one of six
-variants sends one — so `refuse_descriptors()` is exactly what we
-wanted. It cannot be used, because it makes the reply unreachable.
-
-`Client::with_descriptors()` checks `DOOR_REFUSE_DESC` and refuses:
-
-```rust
-pub fn with_descriptors(self) -> Result<Client<Descriptors>, Error> {
-    let info = self.info()?;
-    if info.attributes() & DOOR_REFUSE_DESC != 0 {
-        return Err(Error::RefusesDescriptors);
-    }
-    // ...
-}
-```
-
-and `with_descriptors()` is also what makes a client able to **receive**
-one. A `Client<NoDescriptors>` handed a descriptor closes it and fails
-the call with `UnexpectedDescriptors`.
-
-So `DOOR_REFUSE_DESC` — a flag about the *argument* direction — makes
-the *reply* direction unusable through the safe API. We fell back to
-`max_descriptors(0)`, which keeps the part of the intent that matters
-(the kernel rejects a call carrying a descriptor before the server
-procedure runs) without the flag.
-
-Two related notes:
-
-- The typestate reads as being about sending. `Client<NoDescriptors>`
-  sounds like "this client does not send descriptors"; it also means
-  "this client cannot receive one". Every one of our five handback
-  variants needs `with_descriptors()` despite none of them ever sending
-  anything. Not wrong — one flag governs both directions — but the name
-  points one way and the consequence points the other, and the failure
-  arrives as *every request failing at run time* rather than as a
-  compile error.
-- Worth a sentence in the `refuse_descriptors()` and
-  `with_descriptors()` docs: "a door that returns descriptors must not
-  set this."
-
----
-
-## 4. Neither `Door` nor `Client` will lend its descriptor
-
-This is deliberate and documented, and we think it is the right default
-— handing the raw descriptor out would let somebody `close` it or
-`door_call` it behind the typestate's back. Recording it because it has
-a cost that is not obvious until you hit it.
-
-To send *your own* door to a peer, you need a descriptor for it. There
-is no way to get one from the `Door` you are holding, so you have to
-open your own `fattach`ed path:
-
-```rust
-let mut d = Door::builder(state).build(emit_proc)?;
-d.attach(&path)?;
-// ...and now, to send it, open it again by name:
-let raw = unsafe { libc::open(c_path.as_ptr(), libc::O_RDONLY) };
-let fd = unsafe { OwnedFd::from_raw_fd(raw) };
-client.call_with_descriptors(data, vec![SentFd::Shared(fd.as_fd())])?;
-```
-
-That works, but it means the door can only be sent if it has been
-attached to a path — a `door_create`d door that was never `fattach`ed
-cannot be handed to anybody, even though the kernel is perfectly happy
-to pass it.
-
-**Suggested fix:** a borrowing accessor that yields something sendable
-without yielding something closable, e.g.
-
-```rust
-impl<S> Door<S> {
-    /// Borrow this door for sending to a peer.
-    pub fn as_sendable(&self) -> SentFd<'_>;
-}
-```
-
----
-
-## 5. `run::<S, …>` must match the builder's `S`, and says nothing if it does not
-
-```rust
-let door = Door::builder(app.clone())        // S = Arc<App>
-    .build(stream_proc)?;
-
-// in stream_proc:
-run::<App, NoDescriptors, _, io::Error>(...)  // S = App  <-- wrong
-```
-
-This compiles. Every call then fails with
-`ServerFailed(StateUnavailable)`, because the cookie registry is keyed
-by type and the lookup misses.
-
-It took a while to find, because `StateUnavailable` reads as "the
-server's state has gone away" — which is what it means, but the reason
-here is that it was never registered under the type being asked for.
-The error cannot distinguish "your state was dropped" from "you asked
-for the wrong type".
-
-This only bites people using `run` directly, which today means people
-working around finding #2 — so fixing #2 largely removes it. If the raw
-path is going to stay reachable, it would help for
-`Error::ServerFault::StateUnavailable` to carry the type name it looked
-for (`std::any::type_name::<S>()`), which is free in the failure path.
-
----
-
-## Things that worked exactly as documented
-
-Worth saying, since the above is all complaints.
-
-- **`Reply` unmapping on `Drop`.** Never thought about it once across
-  101 runs and millions of calls. No leaks.
-- **The `Rejected { returned, .. }` / `Consumed` split.** We rely on
-  `Rejected` carrying the errno to implement the `EBADF` → reopen retry
-  that GOALS.md asks for, and on `Released` descriptors coming back on
-  that path. Both behaved.
-- **`SentFd::Shared` genuinely not closing our descriptor.** The A4
-  variant sends the same door on every one of hundreds of thousands of
-  calls. If `Shared` had leaked or closed, we would have found out
-  immediately.
-- **Panic containment.** We panicked a server procedure by accident
-  early on and got an error back at the client rather than an
-  unwind through an `extern "C"` frame.
-- **The stack-size check at build time.** Caught a genuinely too-small
-  `thread_stack_size` before it became a run-time crash.
+- **`Reply` unmapping on `Drop`.** We never thought about it once,
+  across 101 runs and roughly ten million calls. No leaks.
+- **`SentFd::Shared` genuinely not closing our fd.** Our A4 design
+  sends the same door on every one of hundreds of thousands of calls. A
+  leak or an early close would have been immediate and obvious.
+- **The split between `Rejected` and `Consumed`.** We rely on
+  `Rejected` carrying the errno, to reopen and retry when a door server
+  restarts. It behaved exactly as documented.
+- **Panics contained.** We panicked a server procedure by accident early
+  on. The client got an error back. Nothing unwound through a C frame.
+- **The stack size check at build time.** It caught a
+  `thread_stack_size` that was too small, before it could become a
+  crash under load.
+- **`#[door(handback)]` refusing a wrong return type with a real
+  message.** We wrote `Result<Vec<u8>, E>` and forgot the fds, which is
+  exactly the slip that check is there for, and were told so in one
+  line.
 
 ## Versions
 
-- `doors` 0.9.0, `doors-sys` 0.1.0, `door-macros` 0.2.0, as of the
-  worktree next to this one.
-- OmniOS r151058 (`SunOS 5.11 omnios-r151058-516f7694c9 i86pc`),
-  2 vCPUs, 2 GB.
-- rustc 1.97.1 (OmniOS/151058).
+- `doors`, `doors-sys` and `door-macros` as of `d57e567`.
+- OmniOS r151058, `SunOS 5.11 omnios-r151058-516f7694c9 i86pc`, two
+  CPUs, 2 GB.
+- rustc 1.97.1, OmniOS build.
 
----
+## A note for whoever measures anything here
 
-# Response from the maintainers
-
-All five confirmed against `doors` 0.9.0 and fixed. Thank you — the
-report was accurate in every particular, and finding 1's diagnosis was
-correct down to the mechanism.
-
-| # | Status | Where |
-|---|---|---|
-| 1 | Fixed | `door_bind` before parking, private doors only |
-| 2 | Fixed | new `#[door(handback)]` shape |
-| 3 | Documented | four doc sites, plus a test pinning the workaround |
-| 4 | Fixed | `Door::as_sendable()` |
-| 5 | Improved | a once-per-process warning naming both types |
-
-**1.** Exactly as you diagnosed. `experiments/private_pool.c` shows it
-in C — the same program hangs without the bind and answers 20 of 20
-with it. The fix binds only `DOOR_PRIVATE` doors, because a bound
-thread serves that door and nothing else; binding a shared one would
-have starved every other door in the process.
-
-There was a wrinkle from inside: for a private door the creation
-function can be called *during* `door_create`, before there is a
-descriptor to bind to. The per-door table now carries the descriptor,
-the builder publishes it as soon as it has one, and the server thread
-waits on a condvar — bounded, because trading a hang under load for a
-hang at startup would be no improvement.
-
-`doors/tests/private_pool.rs` is the regression test. It discriminates:
-with the bind removed the two private-pool cases fail and the
-shared-pool case still passes.
-
-**2.** `#[door(handback)]`, with the signature you proposed. Note the
-reply carries at most 16 descriptors (`MAX_REPLY_DESCRIPTORS`) and
-anything past that is closed rather than sent — documented on the
-shape, since losing a descriptor silently would be a poor trade for the
-`__private` escape you were making.
-
-**3.** Documentation only; the behaviour is right and you said so. The
-trap is now spelled out on `refuse_descriptors`, `max_descriptors`,
-`with_descriptors` and both marker types, and
-`doors/tests/handback_without_refuse.rs` pins the `max_descriptors(0)`
-workaround so it cannot regress.
-
-**4.** `Door::as_sendable() -> Result<SentFd<'_>, Error>`. It returns
-`Result` rather than a bare `SentFd` so a door disowned by a `fork` can
-refuse, consistent with `detach` and `info`.
-
-**5.** With a constraint you could not have seen: `ServerFault` crosses
-the wire as a single discriminant byte, so it cannot carry a type name
-to the client. Instead the server prints once per process, naming both
-the type the state was registered as and the type the procedure asked
-for. Once, not per call, and through `write_all` rather than
-`eprintln!` — the latter panics if the write fails, and a panic there
-would unwind into the kernel's frame.
-
-Your "things that worked" section was the most useful part to receive.
-`Reply`'s unmapping, the `Rejected`/`Consumed` split and
-`SentFd::Shared` had never been exercised at that volume here.
+The first run of a benchmark on a fresh guest was 20 per cent slower
+than the three runs after it, on the same binary. Taken alone, it would
+have shown a completely fictitious 27 per cent gain from a change that
+in fact does nothing at all. Repeat before believing any single number.

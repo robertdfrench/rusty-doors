@@ -168,11 +168,11 @@ impl<S: Send + Sync + 'static> DoorBuilder<S> {
     /// crate.
     ///
     /// By default every reply starts with one byte saying whether the
-    /// server procedure returned data, returned an error, or failed
-    /// (`GOALS.md` §3.9). That byte is a private agreement between two
-    /// peers that both use this crate. A door client written in C
-    /// knows nothing about it and would read it as the first byte of
-    /// the reply. So this switches it off: the reply is then exactly
+    /// server procedure returned data, returned an error, or failed.
+    /// That byte is a private agreement between two peers that both
+    /// use this crate. A door client written in C knows nothing about
+    /// it and would read it as the first byte of the reply. So this
+    /// switches it off: the reply is then exactly
     /// the bytes the server procedure produced, with no framing of any
     /// kind.
     ///
@@ -431,37 +431,129 @@ fn stack_size_for(cookie: usize) -> usize {
 /// Bounded on purpose. If the descriptor never arrives — the door
 /// failed to build, say — the thread parks unbound rather than waiting
 /// for ever. An unbound thread on a private door is useless, but it is
-/// a great deal better than a thread that never comes back.
+/// a great deal better than a thread that never comes back. It is also
+/// not silent: see [`warn_unbound`].
 const FD_WAIT: Duration = Duration::from_secs(5);
 
-/// Wait for `door_create` to publish this door's descriptor.
+/// How a server thread's wait for its door's descriptor ended.
 ///
-/// Returns `None` if it does not arrive in time, or if the entry went
-/// away because the door failed to build.
-fn wait_for_fd(cookie: usize) -> Option<RawFd> {
+/// The two ways of failing are kept apart because they mean different
+/// things to whoever reads the warning. One is a door that never got
+/// built; the other is a door that got built and did not publish its
+/// descriptor in time.
+enum FdWait {
+    /// The descriptor arrived. The thread can bind.
+    Ready(RawFd),
+    /// The door failed to build, so its entry is gone and no
+    /// descriptor is ever coming.
+    DoorGone,
+    /// Nothing arrived within [`FD_WAIT`].
+    TimedOut,
+}
+
+/// Wait for `door_create` to publish this door's descriptor.
+fn wait_for_fd(cookie: usize) -> FdWait {
     let mut table = DOOR_THREADS.lock().unwrap_or_else(|e| e.into_inner());
     let deadline = Instant::now() + FD_WAIT;
 
     loop {
         match table.iter().find(|(c, _)| *c == cookie) {
             // The entry is gone: the door failed to build.
-            None => return None,
+            None => return FdWait::DoorGone,
             Some((_, info)) => {
                 if let Some(fd) = info.fd {
-                    return Some(fd);
+                    return FdWait::Ready(fd);
                 }
             }
         }
 
-        let left = deadline.checked_duration_since(Instant::now())?;
+        let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+            return FdWait::TimedOut;
+        };
         let (guard, timeout) = FD_PUBLISHED
             .wait_timeout(table, left)
             .unwrap_or_else(|e| e.into_inner());
         table = guard;
         if timeout.timed_out() {
-            return None;
+            return FdWait::TimedOut;
         }
     }
+}
+
+/// The cookies of doors we have already complained about.
+///
+/// Only a door that has gone wrong is ever put here, and it is put
+/// here once, so this holds one machine word per broken door and
+/// nothing at all in a healthy process. Cookies are never handed out
+/// twice (see `server::cookie`), so a cookie is a safe name for a
+/// door for the life of the process.
+static WARNED_DOORS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// Say, once for this door, that a server thread could not join the
+/// door's private pool.
+///
+/// # Why say anything
+///
+/// Nobody else can. This runs on a thread the kernel asked for, not
+/// on the thread that called `build`, so there is no `Result` to
+/// return and no caller to return it to. Left quiet, the whole
+/// failure shows up as a private door that answers a call or two and
+/// then stops, with nothing written anywhere. That is the worst shape
+/// a failure can take, and it is the exact bug this binding was added
+/// to fix.
+///
+/// # Why once per door
+///
+/// Once per call, or once per thread, would be worse than the bug. A
+/// busy private door makes the kernel ask for a new server thread
+/// again and again; if the door is broken then every one of those
+/// threads fails here, and the same line would fill the log.
+///
+/// Once per process — what `server::cookie::warn_type_mismatch` does —
+/// is too quiet here. A process can hold several private doors and
+/// only one of them may be broken. With one line per process, the
+/// first door to fail would hide every door that failed after it, and
+/// the hidden ones are the ones nobody is looking for.
+///
+/// So the door is the right unit: one line for each door that is
+/// wrong, and no line for a door that is fine.
+///
+/// # Why not a panic
+///
+/// A door server thread is entered from the kernel through an
+/// `extern "C"` frame. Unwinding out of one of those is undefined
+/// behaviour. The `debug_assert!` at the call site is kept as a
+/// second signal for tests, but it must never be the only one,
+/// because it does nothing in a release build.
+#[cold]
+fn warn_unbound(cookie: usize, reason: &str) {
+    {
+        let mut warned = WARNED_DOORS.lock().unwrap_or_else(|e| e.into_inner());
+        if warned.contains(&cookie) {
+            return;
+        }
+        warned.push(cookie);
+    }
+
+    // `write_all`, not `eprintln!`: `eprintln!` panics if the write
+    // fails, and a panic on a server thread would unwind into the
+    // kernel's frame.
+    use std::io::Write as _;
+    let message = format!(
+        "doors: a server thread could not join its door's private \
+         pool.\n  \
+         {reason}\n  \
+         This door was made with DOOR_PRIVATE, so it has a pool of its \
+         own, and\n  a thread joins that pool by calling door_bind on \
+         the door before it\n  parks. A thread that parks without \
+         binding joins the process-wide\n  pool instead, where this \
+         door will never see it.\n  \
+         So this door is served by fewer threads than it was built to \
+         have. If\n  no thread ever binds, the door answers the calls \
+         already in flight and\n  then stops answering for good.\n  \
+         (This is printed once per door, not once per thread.)\n"
+    );
+    let _ = std::io::stderr().write_all(message.as_bytes());
 }
 
 /// Install our thread-creation function, once per process.
@@ -492,13 +584,14 @@ fn install_server_create_once() {
 /// replaced it. It does not fail; it segfaults inside
 /// `privdoor_data_hold`. Synchronising so the new thread copies the
 /// argument first avoids the crash, and then `door_xcreate` returns
-/// `EINVAL` instead. See `experiments/xcreate3.c`.
+/// `EINVAL` instead.
 ///
 /// `door_create` plus `door_server_create` is the older, documented
 /// mechanism, and it does exactly what is needed: the thread below
-/// really does get the stack size that was asked for, which
-/// `experiments/servercreate.c` confirms by reading it back with
-/// `thr_stksegment`.
+/// really does get the stack size that was asked for, read back with
+/// `thr_stksegment` to be sure.
+// Both of those are measured, not guessed: experiments/xcreate3.c and
+// experiments/servercreate.c in this repository.
 unsafe extern "C" fn create_server_thread(info: *mut door_info_t) {
     // Copy the fields out. door_info_t is packed, so a reference to
     // either of these would be misaligned.
@@ -538,15 +631,42 @@ unsafe extern "C" fn create_server_thread(info: *mut door_info_t) {
                 // to publish it. The wait is bounded; if it never
                 // comes we park unbound, which is useless for this
                 // door but better than a thread that never returns.
-                if let Some(fd) = wait_for_fd(cookie) {
-                    // SAFETY: fd is the descriptor door_create just
-                    // handed the builder for this same cookie.
-                    let rc = unsafe { sys::door_bind(fd) };
-                    debug_assert!(
-                        rc == 0,
-                        "door_bind failed on a private door; it will \
-                         not be served"
-                    );
+                //
+                // Every way of not binding is reported, because none
+                // of them can be reported anywhere else: this thread
+                // belongs to the kernel, not to the caller of `build`.
+                // See `warn_unbound`.
+                match wait_for_fd(cookie) {
+                    FdWait::Ready(fd) => {
+                        // SAFETY: fd is the descriptor door_create
+                        // just handed the builder for this cookie.
+                        let rc = unsafe { sys::door_bind(fd) };
+                        if rc != 0 {
+                            let errno = sys::last_errno().get();
+                            warn_unbound(
+                                cookie,
+                                &format!("door_bind failed: errno {errno}."),
+                            );
+                        }
+                        debug_assert!(
+                            rc == 0,
+                            "door_bind failed on a private door; it \
+                             will not be served"
+                        );
+                    }
+                    FdWait::DoorGone => warn_unbound(
+                        cookie,
+                        "The door failed to build, so it has no \
+                         descriptor to bind to.",
+                    ),
+                    FdWait::TimedOut => warn_unbound(
+                        cookie,
+                        &format!(
+                            "The door's descriptor did not arrive \
+                             within {FD_WAIT:?}, so there was nothing \
+                             to bind to."
+                        ),
+                    ),
                 }
             }
 

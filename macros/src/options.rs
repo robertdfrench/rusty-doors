@@ -14,9 +14,9 @@
 //! #[door(shape?, flag*, request_size = <range>?, max_descriptors = <n>?)]
 //! ```
 //!
-//! Every mistake is a [`syn::Error`] with a span, never a panic
-//! (`GOALS.md` §3.7). A macro that panics reports the wrong file and
-//! no line at all, so the user is left guessing.
+//! Every mistake is a [`syn::Error`] with a span, never a panic. A
+//! macro that panics reports the wrong file and no line at all, so the
+//! user is left guessing.
 
 use proc_macro2::Span;
 use syn::parse::{Parse, ParseStream};
@@ -151,11 +151,11 @@ pub struct DoorOptions {
     pub unref_multi: bool,
     /// `DOOR_PRIVATE`.
     pub private: bool,
-    /// Reply with no §3.9 status byte.
+    /// Reply with no status byte in front.
     ///
     /// Not a kernel attribute like the flags above. It changes what
     /// the generated code writes back, so that a caller which does
-    /// not use this crate can read the reply (`GOALS.md` §6.5).
+    /// not use this crate can read the reply.
     pub untagged: bool,
     /// `DOOR_PARAM_DATA_MIN` and `DOOR_PARAM_DATA_MAX`.
     pub request_size: Option<RequestSize>,

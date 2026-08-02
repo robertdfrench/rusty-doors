@@ -9,7 +9,7 @@
 //! A proc-macro crate can only export macros, so nothing here can
 //! actually run the macro the way a user would. What it can do is call
 //! `expand` with token streams and read what comes back. That is why
-//! `GOALS.md` §3.1 asks for `expand` in the first place.
+//! `expand` exists as its own function at all.
 //!
 //! The checks are on identifiers rather than on the printed text.
 //! Printing a token stream puts spaces in places that depend on the
@@ -20,7 +20,7 @@
 //! Whether the generated code *compiles* is a different question, and
 //! `trybuild` is the tool for it. Those fixtures need the `doors`
 //! crate, which cannot be a dependency here without a cycle, so they
-//! live in `doors` (`GOALS.md` §9.1).
+//! live in `doors`.
 
 use crate::expand;
 use proc_macro2::{TokenStream, TokenTree};

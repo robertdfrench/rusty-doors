@@ -17,7 +17,7 @@
 //! **Never dereference a cookie without going through the lookup.**
 //! Every path from a cookie to server state in this crate goes through
 //! `resolve_or_fault`, and resolution may fail. A failure becomes a
-//! `GOALS.md` §3.9 tag `2` reply carrying
+//! reply tagged as a server fault, carrying
 //! [`ServerFault::StateUnavailable`], and touches no memory at all.
 //!
 //! # How the cookie works
@@ -54,12 +54,12 @@
 //!
 //! # Why the slab is type-erased
 //!
-//! `GOALS.md` §5.3 asks for "a process-global slab". A plain `static`
+//! The slab is one table for the whole process. A plain `static`
 //! cannot be generic, so there is no way to write one slab per `T`.
-//! The slab here is genuinely process-global instead, and stores
-//! `Arc<dyn Any + Send + Sync>`. Resolution downcasts back to `T`.
+//! It stores `Arc<dyn Any + Send + Sync>` instead, and resolution
+//! downcasts back to `T`.
 //!
-//! That buys two things beyond the wording:
+//! That buys two things:
 //!
 //! - One table for the whole process, so a door costs one slot, not
 //!   one allocation plus a leak.
@@ -81,8 +81,8 @@
 //!    to that door, for the life of the process.
 //!
 //! The client sees the same thing either way, and it has to: a reply
-//! carries one status byte, and there is no room in it for a reason
-//! (`GOALS.md` §3.9). The type names only exist in the server process
+//! carries one status byte, and there is no room in it for a reason.
+//! The type names only exist in the server process
 //! anyway. So case 2 is reported here, in the server, by
 //! `warn_type_mismatch` — once per process, on standard error.
 //!
@@ -343,7 +343,7 @@ pub(crate) fn install<T: Send + Sync + 'static>(
 /// The failure is spelled as the fault the client will see, because
 /// the trampoline has to answer the caller no matter what: a missing
 /// state is not an early return, it is a reply. The caller MUST treat
-/// it as a §3.9 tag `2` reply and MUST NOT fall back to dereferencing
+/// it as a server-fault reply and MUST NOT fall back to dereferencing
 /// the cookie itself.
 ///
 /// The two ways of missing are told apart here, because this is the
@@ -386,8 +386,8 @@ pub(crate) unsafe fn resolve_or_fault<T: Send + Sync + 'static>(
 /// # Why say anything
 ///
 /// The client cannot be told. A reply carries a single status byte, so
-/// [`ServerFault::StateUnavailable`] is all the room there is
-/// (`GOALS.md` §3.9), and it reads as "the state went away" when in
+/// [`ServerFault::StateUnavailable`] is all the room there is, and it
+/// reads as "the state went away" when in
 /// truth the state is sitting there under another name. The two type
 /// names exist only in this process, so this is the only place the
 /// difference can be pointed out at all.
@@ -402,7 +402,7 @@ pub(crate) unsafe fn resolve_or_fault<T: Send + Sync + 'static>(
 ///
 /// This runs on a door server thread, called from the kernel through
 /// an `extern "C"` frame. Unwinding out of one of those is undefined
-/// behaviour (`GOALS.md` §12.4), and the resolution happens before the
+/// behaviour, and the resolution happens before the
 /// `catch_unwind` that guards the user's function, so nothing would
 /// catch it. A `debug_assert!` is the same panic with a condition in
 /// front of it, and it would make debug and release builds fail

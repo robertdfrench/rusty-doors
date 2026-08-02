@@ -7,7 +7,9 @@
 use crate::descriptor::{
     DescriptorPolicy, Descriptors, NoDescriptors, ReceivedFd, SentFd,
 };
-use crate::error::{CallError, Error, ServerFault, StatusTag};
+use crate::error::{
+    CallError, Error, NotADoor, NotADoorReason, ServerFault, StatusTag,
+};
 use crate::server::DoorInfo;
 use crate::sys;
 use crate::types::{door_arg_t, door_desc_t};
@@ -17,15 +19,17 @@ use doors_sys::{
 };
 use std::ffi::{c_char, c_void, CString};
 use std::marker::PhantomData;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::mem::ManuallyDrop;
+use std::ops::Deref;
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::path::Path;
 
 /// A mapping the kernel made for a reply, unmapped on `Drop`.
 ///
 /// Its own type, with its own `Drop`, so that unmapping does not
-/// depend on any other field of [`Reply`] being in a particular state
-/// — `GOALS.md` §12.5 says `Reply` always unmaps, and the simplest way
-/// to always is to make it the only thing this type does.
+/// depend on any other field of [`Reply`] being in a particular state.
+/// [`Reply`] must always unmap, and the simplest way to always is to
+/// make it the only thing this type does.
 #[derive(Debug)]
 struct Mapping {
     base: *mut c_void,
@@ -143,9 +147,8 @@ pub struct DoorParams {
 /// possible.
 ///
 /// The descriptor is private: `Client` implements neither `AsRawFd`
-/// nor `IntoRawFd` (`GOALS.md` §12.6), because handing it out would
-/// let someone `close` it or `door_call` it behind the typestate's
-/// back.
+/// nor `IntoRawFd`, because handing it out would let someone `close`
+/// it or `door_call` it behind the typestate's back.
 #[derive(Debug)]
 pub struct Client<D = NoDescriptors> {
     fd: OwnedFd,
@@ -165,9 +168,9 @@ impl Client<NoDescriptors> {
 
     /// Open a door whose descriptor survives `exec`.
     ///
-    /// The explicit opt-out `GOALS.md` §6.1 asks for. Prefer
-    /// [`open`](Client::open) unless a child program genuinely needs
-    /// to inherit this door.
+    /// Inheriting a door is the exception, so it has to be asked for
+    /// by name. Prefer [`open`](Client::open) unless a child program
+    /// genuinely needs to inherit this door.
     pub fn open_inheritable<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         Self::open_inner(path.as_ref(), false)
     }
@@ -233,6 +236,133 @@ impl Client<NoDescriptors> {
             fd: self.fd,
             _d: PhantomData,
         })
+    }
+
+    /// Take ownership of a door that arrived in a request or a reply.
+    ///
+    /// A door that is passed between processes arrives as a
+    /// descriptor. There is no path for it, so [`open`](Client::open)
+    /// cannot be used. This is the way in for that door.
+    ///
+    /// ```no_run
+    /// # use doors::{Client, Reply};
+    /// # fn demo(reply: Reply) -> Result<(), Box<dyn std::error::Error>> {
+    /// let arrived = reply.into_descriptors().pop().expect("a door");
+    /// let client = Client::from_received(arrived)?;
+    /// let answer = client.call(b"hello")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # It costs one system call, and it has to
+    ///
+    /// `door_info(3C)`. The attributes the kernel delivered alongside
+    /// the descriptor look like they should answer this, and they do
+    /// not.
+    ///
+    /// `DOOR_DESCRIPTOR` is set on **everything** a door call
+    /// delivers: files, pipes, sockets, doors. It means "a descriptor
+    /// is being passed here", not "this is a door". The other bits are
+    /// the door's own flags, and they are copied in only for a door —
+    /// so a door made with no flags in another process arrives looking
+    /// exactly like a pipe. Measured; see
+    /// `doors/tests/adopt_a_door.rs`, which sends a plain file through
+    /// a door call and finds `DOOR_DESCRIPTOR` set on it.
+    ///
+    /// So there is nothing to read, and this asks.
+    ///
+    /// # To send or receive descriptors on it
+    ///
+    /// Add [`with_descriptors`](Client::with_descriptors):
+    ///
+    /// ```no_run
+    /// # use doors::{Client, Descriptors, ReceivedFd};
+    /// # fn demo(arrived: ReceivedFd)
+    /// #     -> Result<(), Box<dyn std::error::Error>> {
+    /// let client: Client<Descriptors> =
+    ///     Client::from_received(arrived)?.with_descriptors()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Or, in one step and one system call,
+    /// [`Probably::into_client_with_descriptors`]:
+    ///
+    /// ```no_run
+    /// # use doors::{Client, Descriptors, Probably, ReceivedFd};
+    /// # fn demo(arrived: ReceivedFd)
+    /// #     -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = Probably::new(arrived.into_owned())
+    ///     .into_client_with_descriptors()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # The descriptor's flags are left alone
+    ///
+    /// [`open`](Client::open) sets `FD_CLOEXEC`, because it creates
+    /// the descriptor and so gets to choose. This does not create
+    /// anything; it adopts a descriptor that already exists and
+    /// already has flags somebody else chose. Changing them quietly
+    /// would be a surprise. Set them yourself if you need to.
+    ///
+    /// # Errors
+    ///
+    /// [`NotADoor`] when the descriptor is not a door, or is a door
+    /// that has been revoked. The descriptor comes back in the error,
+    /// still open.
+    pub fn from_received(fd: ReceivedFd) -> Result<Self, NotADoor> {
+        let fd = fd.into_owned();
+        match vet(fd.as_raw_fd(), false) {
+            Ok(()) => Ok(Client {
+                fd,
+                _d: PhantomData,
+            }),
+            Err(reason) => Err(NotADoor { fd, reason }),
+        }
+    }
+
+    /// Adopt a descriptor as a door, asking the kernel nothing.
+    ///
+    /// For a caller who already knows what they have and would rather
+    /// not pay for the `door_info(3C)` call that
+    /// [`Probably::into_client`] makes.
+    ///
+    /// # This is not `unsafe`, and here is why
+    ///
+    /// You hand over an [`OwnedFd`], so ownership is already settled
+    /// and nothing here can close a descriptor twice. If the promise
+    /// below is broken, the result is a wrong answer, not broken
+    /// memory:
+    ///
+    /// - **Not a door.** Every call fails with
+    ///   [`CallError::Rejected`] carrying `EBADF`, and the `returned`
+    ///   list is empty because a plain call sends nothing. Nothing is
+    ///   read, nothing is written, no memory is touched. Measured; see
+    ///   `doors/tests/adopt_a_door.rs`.
+    /// - **A revoked door.** The same, with `EBADF`.
+    ///
+    /// Rust reserves `unsafe` for what can break memory safety. This
+    /// cannot, so it is not marked `unsafe`. The `_unchecked` name is
+    /// the warning instead. Compare
+    /// [`Probably::from_raw_fd`](Probably::from_raw_fd), which **is**
+    /// `unsafe`: a [`RawFd`] carries no ownership, and taking one on
+    /// trust really can lead to a double close.
+    ///
+    /// # What you are promising
+    ///
+    /// That `fd` is an open, unrevoked door. Nothing checks it.
+    ///
+    /// # Name the state
+    ///
+    /// Write `Client::<NoDescriptors>::from_fd_unchecked(fd)`.
+    /// [`Client<Descriptors>`](Client) has a method of the same name,
+    /// so a bare `Client::from_fd_unchecked(fd)` does not compile.
+    pub fn from_fd_unchecked(fd: OwnedFd) -> Self {
+        Client {
+            fd,
+            _d: PhantomData,
+        }
     }
 }
 
@@ -479,6 +609,81 @@ impl<D: DescriptorPolicy> Client<D> {
 }
 
 impl Client<Descriptors> {
+    /// Adopt a descriptor as a door that carries descriptors, asking
+    /// the kernel nothing.
+    ///
+    /// This is the one that saves real work. Every other way to a
+    /// [`Client<Descriptors>`](Client) makes a `door_info(3C)` call to
+    /// see whether the door was created with `DOOR_REFUSE_DESC`. That
+    /// is one system call per door adopted, and a program that adopts
+    /// doors at a high rate pays it every time. This skips it.
+    ///
+    /// ```no_run
+    /// # use doors::{Client, Descriptors};
+    /// # fn demo(fd: std::os::fd::OwnedFd) {
+    /// // We created this door ourselves and know it takes descriptors.
+    /// let client = Client::<Descriptors>::from_fd_unchecked(fd);
+    /// # }
+    /// ```
+    ///
+    /// # Name the state, always
+    ///
+    /// Write `Client::<Descriptors>::from_fd_unchecked(fd)`, with the
+    /// turbofish. There is a method of this name on
+    /// [`Client<NoDescriptors>`](Client) too, and a bare
+    /// `Client::from_fd_unchecked(fd)` does not compile: the compiler
+    /// cannot tell which one you meant, even from the type you are
+    /// assigning to. Saying it out loud is no bad thing for a method
+    /// that skips a check.
+    ///
+    /// # This is not `unsafe`, and here is why
+    ///
+    /// You hand over an [`OwnedFd`], so ownership is settled and
+    /// nothing here can close a descriptor twice. Breaking the promise
+    /// gives wrong answers, not broken memory. See
+    /// [`Client::<NoDescriptors>::from_fd_unchecked`] for the longer
+    /// version of that argument.
+    ///
+    /// # What you are promising
+    ///
+    /// Two things, and the second one costs the most to get wrong.
+    ///
+    /// 1. That `fd` is an open, unrevoked door. If it is not, every
+    ///    call fails with [`CallError::Rejected`] carrying `EBADF`.
+    ///    Nothing else happens.
+    ///
+    /// 2. That the door was **not** created with `DOOR_REFUSE_DESC`.
+    ///
+    /// # If you get the second one wrong
+    ///
+    /// [`call_with_descriptors`](Client::call_with_descriptors) fails
+    /// with [`CallError::Rejected`] carrying `ENOTSUP`, and your
+    /// descriptors come back in `returned`. The kernel refuses a
+    /// descriptor-carrying call to such a door before taking
+    /// anything, so nothing is lost — you just do not get a reply.
+    ///
+    /// This used to leak one descriptor per call, because `ENOTSUP`
+    /// fell through to [`CallError::Consumed`], which says the kernel
+    /// took them. `experiments/refuse_desc_errno.c` measured that it
+    /// does not.
+    ///
+    /// Measured, both parts; see `doors/tests/adopt_a_door.rs`.
+    ///
+    /// That is the whole argument for the check this method skips. It
+    /// is one `door_info(3C)` call, once, at adoption, and it turns a
+    /// silent per-call leak into one error at the point of the
+    /// mistake. Skip it only for a door you created yourself, or one
+    /// whose flags you have already read.
+    ///
+    /// [`Client::<NoDescriptors>::from_fd_unchecked`]:
+    ///     Client::from_fd_unchecked
+    pub fn from_fd_unchecked(fd: OwnedFd) -> Self {
+        Client {
+            fd,
+            _d: PhantomData,
+        }
+    }
+
     /// Call the door, sending descriptors.
     ///
     /// Takes the descriptors **by value**, and it has to. The kernel
@@ -499,7 +704,320 @@ impl Client<Descriptors> {
     }
 }
 
-/// A view of a [`Client`] that does not use the §3.9 status tag.
+// ---------------------------------------------------------------------
+// Adopting a descriptor that is supposed to be a door
+// ---------------------------------------------------------------------
+
+/// Ask the kernel whether this descriptor is a door we can use.
+///
+/// `door_info(3C)` is the test, and it is a good one: it answers for a
+/// door and fails with `EBADF` for anything else. There is no other
+/// way to ask. Nothing about a descriptor's number says what is behind
+/// it.
+///
+/// `wants_descriptors` says whether the caller is building a
+/// [`Client<Descriptors>`](Client). `DOOR_REFUSE_DESC` only matters
+/// then; a door that refuses descriptors is a fine door for plain
+/// calls.
+fn vet(fd: RawFd, wants_descriptors: bool) -> Result<(), NotADoorReason> {
+    let info =
+        crate::server::door_info_errno(fd).map_err(NotADoorReason::NotADoor)?;
+
+    // A revoked door answers nothing, so a client over one could only
+    // ever fail. Failing here is better: the caller still has the
+    // descriptor and can do something else with it.
+    if info.is_revoked() {
+        return Err(NotADoorReason::Revoked);
+    }
+
+    if wants_descriptors && info.refuses_descriptors() {
+        return Err(NotADoorReason::RefusesDescriptors);
+    }
+
+    Ok(())
+}
+
+/// A descriptor that is supposed to be a door. Nobody has checked yet.
+///
+/// A descriptor can arrive from anywhere: inherited across an `exec`,
+/// passed over a UNIX socket, named on the command line. Nothing about
+/// the number says what is behind it. This type is that doubt, written
+/// down.
+///
+/// It exists so the check cannot be skipped by accident. There is no
+/// way from here to a [`Client`] that does not go past the check.
+/// (There is a way that skips it on purpose —
+/// [`Client::from_fd_unchecked`] — but you have to name it.)
+///
+/// ```no_run
+/// # use doors::{Client, Probably};
+/// # use std::os::fd::OwnedFd;
+/// # fn demo(inherited: OwnedFd)
+/// #     -> Result<(), Box<dyn std::error::Error>> {
+/// let client = Probably::new(inherited).into_client()?;
+/// let reply = client.call(b"hello")?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # For a descriptor that came from a door call
+///
+/// [`Client::from_received`] is the friendlier way in: it takes a
+/// [`ReceivedFd`] and does the same check. It is not cheaper. The
+/// attributes the kernel delivers cannot tell a door from a pipe, so
+/// both go and ask.
+///
+/// # If it is not a door
+///
+/// The descriptor comes back in the error. See [`NotADoor`].
+///
+/// # The descriptor's flags are left alone
+///
+/// Nothing here sets or clears `FD_CLOEXEC`. The descriptor already
+/// existed and its flags are somebody else's choice. Only
+/// [`Client::open`], which creates the descriptor, chooses for you.
+#[derive(Debug)]
+pub struct Probably {
+    fd: OwnedFd,
+}
+
+impl Probably {
+    /// Take a descriptor that might be a door.
+    pub fn new(fd: OwnedFd) -> Self {
+        Probably { fd }
+    }
+
+    /// Take a raw descriptor that might be a door.
+    ///
+    /// # Safety
+    ///
+    /// This one really is `unsafe`, unlike the `_unchecked`
+    /// constructors elsewhere in this module. The reason is ownership,
+    /// not doors.
+    ///
+    /// The caller must guarantee:
+    ///
+    /// - `fd` is open, and
+    /// - the caller owns it, and gives that ownership up here.
+    ///
+    /// A [`RawFd`] is a plain integer. It says nothing about who is
+    /// responsible for closing it, and there is no way to find out. If
+    /// something else also owns this descriptor, both owners will
+    /// close it. The second close may land on a completely unrelated
+    /// file that has since taken the same number, and then reads and
+    /// writes meant for one file go to another. That is why this is
+    /// `unsafe` and [`new`](Probably::new) is not: an [`OwnedFd`]
+    /// carries the ownership the caller has to promise here.
+    ///
+    /// Whether `fd` is a door is a separate question, and not a safety
+    /// one. [`into_client`](Probably::into_client) answers it.
+    pub unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        Probably {
+            // SAFETY: the caller promised this descriptor is open and
+            // that they are handing over their ownership of it.
+            fd: unsafe { OwnedFd::from_raw_fd(fd) },
+        }
+    }
+
+    /// Ask the kernel about it, without giving up ownership.
+    ///
+    /// Useful before deciding what to do: the answer says which
+    /// process serves the door, whether it is revoked, and whether it
+    /// refuses descriptors. Fails with [`Error::Sys`] when the
+    /// descriptor is not a door at all.
+    ///
+    /// This is the same call the conversions make, so a caller who
+    /// only wants a client should not call it first — just convert,
+    /// and read the reason out of the error.
+    pub fn inspect(&self) -> Result<DoorInfo, Error> {
+        crate::server::door_info_for(self.fd.as_raw_fd())
+    }
+
+    /// Check it, and on success make a client for plain calls.
+    ///
+    /// # Errors
+    ///
+    /// [`NotADoor`] when the descriptor is not a door, or is a door
+    /// that has been revoked. Your descriptor comes back in the error.
+    pub fn into_client(self) -> Result<Client<NoDescriptors>, NotADoor> {
+        match vet(self.fd.as_raw_fd(), false) {
+            Ok(()) => Ok(Client {
+                fd: self.fd,
+                _d: PhantomData,
+            }),
+            Err(reason) => Err(NotADoor {
+                fd: self.fd,
+                reason,
+            }),
+        }
+    }
+
+    /// Check it, and on success make a client that carries
+    /// descriptors.
+    ///
+    /// One extra check on top of [`into_client`](Probably::into_client):
+    /// a door created with `DOOR_REFUSE_DESC` is refused, because such
+    /// a door can neither take a descriptor nor send one back. A
+    /// client over it could only ever fail.
+    ///
+    /// # Errors
+    ///
+    /// [`NotADoor`], with [`NotADoorReason::RefusesDescriptors`] for
+    /// that last case. Your descriptor comes back in the error.
+    pub fn into_client_with_descriptors(
+        self,
+    ) -> Result<Client<Descriptors>, NotADoor> {
+        match vet(self.fd.as_raw_fd(), true) {
+            Ok(()) => Ok(Client {
+                fd: self.fd,
+                _d: PhantomData,
+            }),
+            Err(reason) => Err(NotADoor {
+                fd: self.fd,
+                reason,
+            }),
+        }
+    }
+
+    /// Take the descriptor back.
+    ///
+    /// Nothing was done to it, so this gives back exactly what
+    /// [`new`](Probably::new) was given.
+    pub fn into_fd(self) -> OwnedFd {
+        self.fd
+    }
+}
+
+/// A [`Client`] that borrows its descriptor instead of owning it.
+///
+/// For calling a door many times without taking it over. The common
+/// case is a descriptor that belongs to something else and has to keep
+/// belonging to it: one held by a [`Reply`], or by a
+/// [`ReceivedFd`](crate::ReceivedFd) you want to hand on afterwards.
+///
+/// ```no_run
+/// # use doors::{BorrowedClient, ReceivedFd};
+/// # fn demo(arrived: &ReceivedFd)
+/// #     -> Result<(), Box<dyn std::error::Error>> {
+/// let door = BorrowedClient::new(arrived.as_fd())?;
+/// for _ in 0..1000 {
+///     let reply = door.call(b"tick")?;
+/// }
+/// // `arrived` still owns the descriptor and still closes it.
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # It has every method a `Client` has
+///
+/// Through [`Deref`]. Every calling method on [`Client`] takes
+/// `&self`, so `borrowed.call(..)`, `borrowed.call_into(..)`,
+/// `borrowed.untagged()`, `borrowed.info()` and `borrowed.limits()`
+/// all work, and a `BorrowedClient<'_, Descriptors>` also has
+/// [`call_with_descriptors`](Client::call_with_descriptors). Nothing
+/// is duplicated here, and [`Client`] itself is unchanged.
+///
+/// There is deliberately no `DerefMut`, and no way to get an owned
+/// [`Client`] out. Either one would let the descriptor be closed by
+/// something that does not own it.
+///
+/// # It never closes the descriptor
+///
+/// The whole point. The lifetime is borrowed from the descriptor, so
+/// the borrow checker will not let this outlive whatever does own it.
+#[derive(Debug)]
+pub struct BorrowedClient<'a, D = NoDescriptors> {
+    /// Never dropped, so the `OwnedFd` inside is never closed.
+    inner: ManuallyDrop<Client<D>>,
+    /// Carries the borrow, so this cannot outlive the descriptor.
+    _fd: PhantomData<BorrowedFd<'a>>,
+}
+
+impl<'a, D> BorrowedClient<'a, D> {
+    /// Wrap a borrowed descriptor without taking it over.
+    fn wrap(fd: BorrowedFd<'a>) -> Self {
+        let client = Client {
+            // SAFETY: this OwnedFd must never close what it holds,
+            // because we do not own it. ManuallyDrop is what
+            // guarantees that: the Client is never dropped, so its
+            // OwnedFd is never dropped either, so the descriptor is
+            // never closed. Nothing else in this type touches it.
+            fd: unsafe { OwnedFd::from_raw_fd(fd.as_raw_fd()) },
+            _d: PhantomData,
+        };
+        BorrowedClient {
+            inner: ManuallyDrop::new(client),
+            _fd: PhantomData,
+        }
+    }
+}
+
+impl<'a> BorrowedClient<'a, NoDescriptors> {
+    /// Borrow a door for plain calls, checking that it is one.
+    ///
+    /// Costs one `door_info(3C)` call, once, not once per door call.
+    ///
+    /// # Errors
+    ///
+    /// [`NotADoorReason`] on its own, and not [`NotADoor`]: there is
+    /// no descriptor to hand back, because you never gave one up.
+    pub fn new(fd: BorrowedFd<'a>) -> Result<Self, NotADoorReason> {
+        vet(fd.as_raw_fd(), false)?;
+        Ok(Self::wrap(fd))
+    }
+
+    /// Borrow a door for plain calls, asking the kernel nothing.
+    ///
+    /// Not `unsafe`: the descriptor is borrowed, so its ownership is
+    /// already settled, and a descriptor that turns out not to be a
+    /// door only makes every call fail with `EBADF`. See
+    /// [`Client::from_fd_unchecked`] for the full argument.
+    pub fn new_unchecked(fd: BorrowedFd<'a>) -> Self {
+        Self::wrap(fd)
+    }
+}
+
+impl<'a> BorrowedClient<'a, Descriptors> {
+    /// Borrow a door that carries descriptors, checking that it can.
+    ///
+    /// Refuses a door created with `DOOR_REFUSE_DESC`, which can
+    /// neither take a descriptor nor send one back.
+    ///
+    /// # Errors
+    ///
+    /// [`NotADoorReason`] on its own. There is no descriptor to hand
+    /// back, because you never gave one up.
+    pub fn with_descriptors(
+        fd: BorrowedFd<'a>,
+    ) -> Result<Self, NotADoorReason> {
+        vet(fd.as_raw_fd(), true)?;
+        Ok(Self::wrap(fd))
+    }
+
+    /// Borrow a door that carries descriptors, asking the kernel
+    /// nothing.
+    ///
+    /// Not `unsafe`, for the reasons given on
+    /// [`Client::<Descriptors>::from_fd_unchecked`]. You are promising
+    /// the same two things: that this is a live door, and that it was
+    /// not created with `DOOR_REFUSE_DESC`.
+    ///
+    /// [`Client::<Descriptors>::from_fd_unchecked`]:
+    ///     Client::from_fd_unchecked
+    pub fn with_descriptors_unchecked(fd: BorrowedFd<'a>) -> Self {
+        Self::wrap(fd)
+    }
+}
+
+impl<D> Deref for BorrowedClient<'_, D> {
+    type Target = Client<D>;
+
+    fn deref(&self) -> &Client<D> {
+        &self.inner
+    }
+}
+
+/// A view of a [`Client`] that does not read a status byte.
 ///
 /// Made by [`Client::untagged`]. It offers the same calls as `Client`,
 /// and they behave the same in every way but one: the reply bytes are
@@ -653,7 +1171,7 @@ impl Untagged<'_, Descriptors> {
     }
 }
 
-/// Split the §3.9 status tag off the front of a reply.
+/// Split the status byte off the front of a reply.
 fn decode_tagged(reply: Reply) -> Result<Reply, CallError> {
     let bytes = reply.data();
     let Some((&tag, _rest)) = bytes.split_first() else {
@@ -693,12 +1211,25 @@ fn advance_one(mut reply: Reply) -> Reply {
 /// taking them, so they are ours to hand back. Everything else —
 /// documented or not — means they are gone. Guessing generously here
 /// would cause double closes, so the safe default is `Consumed`.
+///
+/// `ENOTSUP` was added to the hand-back list after measuring it.
+/// Sending a descriptor to a door created with `DOOR_REFUSE_DESC`
+/// fails with `ENOTSUP`, and the kernel rejects the call *before*
+/// taking anything — `experiments/refuse_desc_errno.c` shows the
+/// descriptor still open afterwards and still referring to the same
+/// file, comparing `st_dev`/`st_ino`/`st_rdev` rather than trusting
+/// `F_GETFD`. Treating it as consumed leaked one descriptor per call.
+///
+/// Note the shape of that evidence. A descriptor is only added to this
+/// list on a measurement that checks file identity; a descriptor
+/// *number* can be closed and handed straight back out, so
+/// `fcntl(F_GETFD)` succeeding proves nothing on its own.
 fn classify_call_failure(
     errno: doors_sys::Errno,
     released: Vec<RawFd>,
 ) -> CallError {
     match errno.get() {
-        libc::EFAULT | libc::EBADF => {
+        libc::EFAULT | libc::EBADF | libc::ENOTSUP => {
             // Re-wrap: we still own these.
             let returned = released
                 .into_iter()
