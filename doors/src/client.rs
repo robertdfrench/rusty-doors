@@ -286,13 +286,13 @@ impl Client<NoDescriptors> {
     /// ```
     ///
     /// Or, in one step and one system call,
-    /// [`Probably::into_client_with_descriptors`]:
+    /// [`MaybeDoor::into_client_with_descriptors`]:
     ///
     /// ```no_run
-    /// # use doors::{Client, Descriptors, Probably, ReceivedFd};
+    /// # use doors::{Client, Descriptors, MaybeDoor, ReceivedFd};
     /// # fn demo(arrived: ReceivedFd)
     /// #     -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = Probably::new(arrived.into_owned())
+    /// let client = MaybeDoor::new(arrived.into_owned())
     ///     .into_client_with_descriptors()?;
     /// # Ok(())
     /// # }
@@ -326,7 +326,7 @@ impl Client<NoDescriptors> {
     ///
     /// For a caller who already knows what they have and would rather
     /// not pay for the `door_info(3C)` call that
-    /// [`Probably::into_client`] makes.
+    /// [`MaybeDoor::into_client`] makes.
     ///
     /// # This is not `unsafe`, and here is why
     ///
@@ -345,7 +345,7 @@ impl Client<NoDescriptors> {
     /// Rust reserves `unsafe` for what can break memory safety. This
     /// cannot, so it is not marked `unsafe`. The `_unchecked` name is
     /// the warning instead. Compare
-    /// [`Probably::from_raw_fd`](Probably::from_raw_fd), which **is**
+    /// [`MaybeDoor::from_raw_fd`](MaybeDoor::from_raw_fd), which **is**
     /// `unsafe`: a [`RawFd`] carries no ownership, and taking one on
     /// trust really can lead to a double close.
     ///
@@ -750,11 +750,11 @@ fn vet(fd: RawFd, wants_descriptors: bool) -> Result<(), NotADoorReason> {
 /// [`Client::from_fd_unchecked`] — but you have to name it.)
 ///
 /// ```no_run
-/// # use doors::{Client, Probably};
+/// # use doors::{Client, MaybeDoor};
 /// # use std::os::fd::OwnedFd;
 /// # fn demo(inherited: OwnedFd)
 /// #     -> Result<(), Box<dyn std::error::Error>> {
-/// let client = Probably::new(inherited).into_client()?;
+/// let client = MaybeDoor::new(inherited).into_client()?;
 /// let reply = client.call(b"hello")?;
 /// # Ok(())
 /// # }
@@ -776,15 +776,33 @@ fn vet(fd: RawFd, wants_descriptors: bool) -> Result<(), NotADoorReason> {
 /// Nothing here sets or clears `FD_CLOEXEC`. The descriptor already
 /// existed and its flags are somebody else's choice. Only
 /// [`Client::open`], which creates the descriptor, chooses for you.
+///
+/// # Why it is called that
+///
+/// `Maybe` is the standard library's own word for a value whose
+/// contents are not yet established: `MaybeUninit`, `MaybeDangling`,
+/// `MaybeDone`. It is the only prefix `std` uses for this, so it is
+/// the one used here.
+///
+/// For a value that is *supposed* to be something, `std` would more
+/// often skip the wrapper and offer a fallible constructor —
+/// `str::from_utf8` takes bytes that are supposed to be UTF-8 and
+/// answers with a `Result`. That shape is available here too, as
+/// [`Client::from_fd_unchecked`] and [`Client::from_received`].
+///
+/// This type earns its place by holding the descriptor while you
+/// decide *which* client you want. A constructor on `Client` cannot,
+/// because the same name would live on both `Client<NoDescriptors>`
+/// and `Client<Descriptors>` and every call would need a turbofish.
 #[derive(Debug)]
-pub struct Probably {
+pub struct MaybeDoor {
     fd: OwnedFd,
 }
 
-impl Probably {
+impl MaybeDoor {
     /// Take a descriptor that might be a door.
     pub fn new(fd: OwnedFd) -> Self {
-        Probably { fd }
+        MaybeDoor { fd }
     }
 
     /// Take a raw descriptor that might be a door.
@@ -806,13 +824,13 @@ impl Probably {
     /// close it. The second close may land on a completely unrelated
     /// file that has since taken the same number, and then reads and
     /// writes meant for one file go to another. That is why this is
-    /// `unsafe` and [`new`](Probably::new) is not: an [`OwnedFd`]
+    /// `unsafe` and [`new`](MaybeDoor::new) is not: an [`OwnedFd`]
     /// carries the ownership the caller has to promise here.
     ///
     /// Whether `fd` is a door is a separate question, and not a safety
-    /// one. [`into_client`](Probably::into_client) answers it.
+    /// one. [`into_client`](MaybeDoor::into_client) answers it.
     pub unsafe fn from_raw_fd(fd: RawFd) -> Self {
-        Probably {
+        MaybeDoor {
             // SAFETY: the caller promised this descriptor is open and
             // that they are handing over their ownership of it.
             fd: unsafe { OwnedFd::from_raw_fd(fd) },
@@ -855,7 +873,7 @@ impl Probably {
     /// Check it, and on success make a client that carries
     /// descriptors.
     ///
-    /// One extra check on top of [`into_client`](Probably::into_client):
+    /// One extra check on top of [`into_client`](MaybeDoor::into_client):
     /// a door created with `DOOR_REFUSE_DESC` is refused, because such
     /// a door can neither take a descriptor nor send one back. A
     /// client over it could only ever fail.
@@ -882,7 +900,7 @@ impl Probably {
     /// Take the descriptor back.
     ///
     /// Nothing was done to it, so this gives back exactly what
-    /// [`new`](Probably::new) was given.
+    /// [`new`](MaybeDoor::new) was given.
     pub fn into_fd(self) -> OwnedFd {
         self.fd
     }

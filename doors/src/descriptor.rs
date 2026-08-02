@@ -123,7 +123,7 @@ impl fmt::Display for DoorId {
 ///
 /// The only way to ask is `door_info(3C)`.
 /// [`Client::from_received`](crate::Client::from_received) and
-/// [`Probably`](crate::Probably) both make that call for you.
+/// [`MaybeDoor`](crate::MaybeDoor) both make that call for you.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DescAttributes(door_attr_t);
 

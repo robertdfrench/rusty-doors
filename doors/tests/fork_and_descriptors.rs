@@ -219,8 +219,17 @@ unsafe extern "C" fn reader_proc(
 
 /// Make a temporary file, write to it, and hand back the descriptor.
 fn tempfile_with(contents: &[u8]) -> std::io::Result<OwnedFd> {
-    let path =
-        std::env::temp_dir().join(format!("doors_tmp_{}", std::process::id()));
+    // A fresh name every time. This used to be keyed on the pid
+    // alone, which meant every test in the process shared one path:
+    // two tests running at once truncated and rewrote each other's
+    // file, and the loser read the winner's bytes. It failed about
+    // once in ten runs and looked like a descriptor bug rather than
+    // what it was.
+    static NEXT: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir()
+        .join(format!("doors_tmp_{}_{n}", std::process::id()));
     let mut f = std::fs::File::options()
         .create(true)
         .read(true)

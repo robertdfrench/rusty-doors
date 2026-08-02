@@ -7,7 +7,7 @@
 //! A door that travels between processes arrives as a descriptor, with
 //! no path anywhere. `Client::open` cannot help. These tests cover the
 //! three ways in: `Client::from_received` for a descriptor the kernel
-//! delivered, `Probably` for one from anywhere else, and
+//! delivered, `MaybeDoor` for one from anywhere else, and
 //! `BorrowedClient` for one you must not take over.
 //!
 //! Every test that adopts a door then **calls** it. A descriptor that
@@ -15,8 +15,8 @@
 //! even if nothing were behind it.
 
 use doors::{
-    BorrowedClient, CallError, Client, Descriptors, Door, NoDescriptors,
-    NotADoorReason, Probably, Request, SentFd,
+    BorrowedClient, CallError, Client, Descriptors, Door, MaybeDoor,
+    NoDescriptors, NotADoorReason, Request, SentFd,
 };
 use std::io::{Read, Seek, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
@@ -294,7 +294,7 @@ fn from_received_hands_back_a_descriptor_that_is_not_a_door() {
 }
 
 // ---------------------------------------------------------------------
-// Probably
+// MaybeDoor
 // ---------------------------------------------------------------------
 
 /// A door reached only by a descriptor, checked and then called.
@@ -303,7 +303,7 @@ fn probably_accepts_a_real_door() {
     let inner = build_inner();
     let copy = dup_of(&inner).expect("dup the door's descriptor");
 
-    let client = Probably::new(copy).into_client().expect("it is a door");
+    let client = MaybeDoor::new(copy).into_client().expect("it is a door");
     let reply = client.call(b"hello").expect("call it");
     assert_eq!(reply.data(), b"the door we were handed answered: hello");
 }
@@ -312,7 +312,7 @@ fn probably_accepts_a_real_door() {
 #[test]
 fn probably_can_be_inspected_first() {
     let inner = build_inner();
-    let maybe = Probably::new(dup_of(&inner).expect("dup"));
+    let maybe = MaybeDoor::new(dup_of(&inner).expect("dup"));
 
     let info = maybe.inspect().expect("door_info answers for a door");
     assert!(info.is_local(), "we serve this door ourselves");
@@ -337,7 +337,7 @@ fn probably_can_be_inspected_first() {
 fn probably_hands_back_a_descriptor_that_is_not_a_door() {
     let file = tempfile_with("plain", b"still readable").expect("make a file");
 
-    let err = match Probably::new(file).into_client() {
+    let err = match MaybeDoor::new(file).into_client() {
         Ok(_) => panic!("a plain file must not become a Client"),
         Err(e) => e,
     };
@@ -368,7 +368,7 @@ fn probably_refuses_a_revoked_door() {
     // and now names a door that answers nothing.
     drop(door);
 
-    let err = match Probably::new(copy).into_client() {
+    let err = match MaybeDoor::new(copy).into_client() {
         Ok(_) => panic!("a revoked door must not become a Client"),
         Err(e) => e,
     };
@@ -385,7 +385,7 @@ fn probably_refuses_a_revoked_door() {
 fn probably_refuses_descriptors_only_when_the_door_does() {
     let strict = build_strict();
 
-    let plain = Probably::new(dup_of(&strict).expect("dup"))
+    let plain = MaybeDoor::new(dup_of(&strict).expect("dup"))
         .into_client()
         .expect("a refuse_desc door is still a perfectly good door");
     assert_eq!(
@@ -393,7 +393,7 @@ fn probably_refuses_descriptors_only_when_the_door_does() {
         b"the strict door answered"
     );
 
-    let err = match Probably::new(dup_of(&strict).expect("dup"))
+    let err = match MaybeDoor::new(dup_of(&strict).expect("dup"))
         .into_client_with_descriptors()
     {
         Ok(_) => panic!("a DOOR_REFUSE_DESC door cannot carry descriptors"),
@@ -402,7 +402,7 @@ fn probably_refuses_descriptors_only_when_the_door_does() {
     assert_eq!(err.reason, NotADoorReason::RefusesDescriptors);
 
     // Refused, so the descriptor is still ours, and still a door.
-    Probably::new(err.fd)
+    MaybeDoor::new(err.fd)
         .into_client()
         .expect("the returned descriptor is unharmed");
 }
@@ -411,7 +411,7 @@ fn probably_refuses_descriptors_only_when_the_door_does() {
 #[test]
 fn probably_makes_a_descriptor_carrying_client() {
     let inner = build_inner();
-    let client = Probably::new(dup_of(&inner).expect("dup"))
+    let client = MaybeDoor::new(dup_of(&inner).expect("dup"))
         .into_client_with_descriptors()
         .expect("this door does not refuse descriptors");
 
@@ -427,7 +427,7 @@ fn probably_gives_the_descriptor_back() {
     let file = tempfile_with("roundtrip", b"round trip").expect("make a file");
     let raw = file.as_raw_fd();
 
-    let back = Probably::new(file).into_fd();
+    let back = MaybeDoor::new(file).into_fd();
 
     assert_eq!(back.as_raw_fd(), raw, "the same descriptor came back");
     assert_eq!(
@@ -582,7 +582,7 @@ fn an_unchecked_client_over_a_non_door_only_fails() {
 ///
 /// So the cost of skipping the check is now a failed call, not a
 /// leaked descriptor. That is still an argument for the one
-/// `door_info` call that `Probably::into_client_with_descriptors`
+/// `door_info` call that `MaybeDoor::into_client_with_descriptors`
 /// makes, just a smaller one.
 #[test]
 fn skipping_the_refuse_desc_check_returns_the_descriptors() {

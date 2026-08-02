@@ -29,11 +29,19 @@ REMOTE ?= /home/$(USER_ON_TARGET)/rusty-doors
 KEY ?= $(HOME)/.ssh/beekeeper-labkey
 HYP ?= omnios-big
 
+# Guests are reached THROUGH the hypervisor by default. The direct
+# route to the lab network is not dependable from a development
+# machine -- it has disappeared mid-session -- and the hypervisor
+# always is, since it is where beekeeper runs. Set JUMP= (empty) to
+# connect straight to the guest instead.
+JUMP ?= root@$(HYP)
+PROXY = $(if $(JUMP),-o ProxyJump=$(JUMP),)
+
 # Lab guests are disposable and get a new address each time, so pinning
 # host keys would only ever produce false alarms.
 SSH = ssh -o BatchMode=yes -i $(KEY) -o IdentitiesOnly=yes \
 	-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-	-o ConnectTimeout=12
+	-o ConnectTimeout=12 $(PROXY)
 
 # Every remote call is wrapped in a deadman timeout.
 TIMEOUT = $(shell command -v timeout 2>/dev/null || command -v gtimeout)

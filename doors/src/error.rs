@@ -383,10 +383,10 @@ impl std::error::Error for CallError {}
 /// reason. This follows it.
 ///
 /// ```no_run
-/// # use doors::{Client, Probably};
+/// # use doors::{Client, MaybeDoor};
 /// # use std::os::fd::OwnedFd;
 /// # fn demo(fd: OwnedFd) -> OwnedFd {
-/// match Probably::new(fd).into_client() {
+/// match MaybeDoor::new(fd).into_client() {
 ///     Ok(client) => { /* it was a door */ todo!() }
 ///     // Not a door. We still have the descriptor.
 ///     Err(e) => e.fd,

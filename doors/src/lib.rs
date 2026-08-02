@@ -57,7 +57,7 @@
 //! [`Client::open`] is no use. Two ways in, for two situations:
 //!
 //! ```no_run
-//! use doors::{Client, Probably, Reply};
+//! use doors::{Client, MaybeDoor, Reply};
 //! use std::os::fd::OwnedFd;
 //!
 //! type Fallible<T> = Result<T, Box<dyn std::error::Error>>;
@@ -74,7 +74,7 @@
 //! // it is, so ask. If it is not a door, the error hands the
 //! // descriptor back.
 //! fn adopt_unknown(fd: OwnedFd) -> Fallible<Client> {
-//!     Ok(Probably::new(fd).into_client()?)
+//!     Ok(MaybeDoor::new(fd).into_client()?)
 //! }
 //! ```
 //!
@@ -134,7 +134,7 @@ pub mod server;
 pub mod __private;
 
 pub use client::{
-    BorrowedClient, Client, DoorParams, Probably, Reply, Untagged,
+    BorrowedClient, Client, DoorParams, MaybeDoor, Reply, Untagged,
 };
 pub use descriptor::{
     DescAttributes, DescriptorPolicy, Descriptors, DoorId, NoDescriptors,
