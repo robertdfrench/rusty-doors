@@ -2367,7 +2367,9 @@ above **ruled out** three suspects, with reasons worth keeping:
 It also turned up three defects that are **not** the `fattach` failure
 but are real, and are listed here in the order they should be fixed:
 
-1. **`in_flight` is never incremented.** Only the initialiser and the
+1. **`in_flight` is never incremented.** *Settled by
+   `specs/RevokeDrain.tla`; see below. The drain is not a soundness
+   mechanism, and moving the increment earlier does not fix it.* Only the initialiser and the
    load in `Door::revoke` exist. The drain loop therefore always reads
    zero and returns immediately, so `revoke()` does **not** wait for
    calls in flight, which `GOALS.md` §5.1 requires.
@@ -2399,3 +2401,52 @@ but are real, and are listed here in the order they should be fixed:
    and the `attached` vector. Memory only, and small, but it is a leak
    on the ordinary shutdown path. Taking the fields out by hand, or
    using `ManuallyDrop`, would fix it.
+
+
+## E.2 What the model settled
+
+`specs/RevokeDrain.tla` answers the question E.1 item 1 left open. Seven
+configurations; five fail.
+
+**The drain is not needed for safety.** `RevokeDrainToday.cfg` is the
+crate exactly as it stands — no increment, drain before uninstall — and
+`NoUseAfterFree` holds across the whole state space (704 states). The
+`Arc` clone taken under the slab lock is enough on its own. So the
+missing increment is not a soundness bug, and E.1 item 1 was overstated.
+
+**But `revoke()` cannot keep its promise.** The same configuration
+violates `RevokeGetsOwned` in 58 states: `Arc::try_unwrap` finds another
+reference and `revoke()` returns `Err(StateStillShared)` when it should
+have handed the state back.
+
+**Moving the increment earlier does not fix it.** This is the part worth
+knowing. Raising the counter *before* resolving the cookie still
+violates `NoUseAfterFree` (`RevokeDrainBefore.cfg`):
+
+```
+Dispatch(t1)      the kernel enters the trampoline, nothing done yet
+RvRevoke          door_revoke
+RvDrain           the counter reads 0, so the loop exits
+RaiseBefore(t1)   NOW t1 raises the counter
+Resolve(t1)       the state is still in the slab, so t1 gets it
+RvUninstall       revoke takes the state out
+RvUnwrap          and frees it
+```
+
+The window moves; it does not close. Reading zero only ever means "zero
+a moment ago".
+
+**What does work** is changing the order: take the state out of the slab
+**first**, then drain. After the uninstall no cookie can resolve, and
+every call that did resolve raised the counter before resolving, so the
+counter cannot read zero until they have all finished. Both halves are
+required — uninstall-first with no increment still fails.
+
+So the change to `Door::revoke` is:
+
+1. raise `in_flight` in the trampoline **before** resolving the cookie,
+   and lower it after the state clone is dropped;
+2. move `cookie::uninstall` **above** the drain loop, with
+   `Arc::try_unwrap` after it.
+
+`RevokeDrain.cfg` is the only configuration where both invariants hold.
