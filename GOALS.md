@@ -730,38 +730,48 @@ store and `close(2)` are permitted; allocation is not.
 Doors exist only on illumos. Development happens on macOS, so every
 behavioural test runs on a disposable OmniOS VM.
 
-### 8.1 `fart` — make the VMs
+### 8.1 `beekeeper` — make the guests
 
-`fart` is the user's own tool at `/Users/davis/Projects/starcrash/fart`.
-It spins disposable OmniOS bhyve guests as instant ZFS clones of a
-golden template. Read `fart/vm.sh` before first use; its header block is
-the reference.
+`beekeeper` lives on the hypervisor and makes disposable OmniOS bhyve
+guests. Run it over ssh; read `ssh root@<hyp> beekeeper help` before
+first use.
 
-Laptop-side driver, run from the `starcrash` repo root:
+- `beekeeper up <name> [--image plain|tools|zone] [--mem <MB>]
+  [--cpus <n>] [--ready launched|address|login|usable]` — create a
+  guest and print its address. Use `--ready usable` so the command
+  does not return until the guest can actually be used.
+- `beekeeper down <name>` — destroy it.
+- `beekeeper ls`, `beekeeper ip <name>`, `beekeeper status`.
+- `beekeeper labkey` — the private key for reaching the guests.
+  `make labkey` writes it to `~/.ssh/beekeeper-labkey`.
 
-- `NIC=<uplink> sh fart/vm.sh bootstrap <HYP>` — install fart and the
-  lab key on the hypervisor and build the boot image if missing.
-  Idempotent. Run once.
-- `NIC=<uplink> sh fart/vm.sh up <HYP> <name> [flavor]` — spin a fresh
-  VM and echo its IP. `flavor` is `tools` or `zone`, default `tools`.
-- `sh fart/vm.sh down <HYP> <name>` — destroy it.
+Guest names are lower case letters and digits, starting with a letter,
+with no leading zero in a trailing number.
 
-`<HYP>` is the hypervisor host; `NIC` is its uplink, and there is no
-safe default for either. On the hypervisor itself the engine is
-`fart {up|down|ls|ip|status|nuke|build|build-status}`.
+The Makefile does NOT create guests. Bring one up, pass its address as
+`TARGET`, tear it down when finished:
+
+```sh
+ssh root@omnios-big beekeeper up doors --ready usable
+make test TARGET=<the address it printed>
+ssh root@omnios-big beekeeper down doors
+```
 
 Rules:
 
-- Every VM is disposable. Never fix a broken VM — `down` it and `up` a
-  fresh one.
-- `down` every VM you bring up, including on failure. `fart nuke` on the
-  hypervisor destroys all fart VMs but never the permanent research
-  guests.
-- Check `fart status` for free RAM before spinning several. Each VM
-  defaults to 2048 MB.
-- A VM has an unprivileged `attacker` user with no sudo, plus key-based
-  root ssh. Build and run tests as `attacker`; use root only where a
-  test genuinely needs privilege.
+- Every guest is disposable. Never fix a broken one — `down` it and
+  bring up a fresh one.
+- `down` every guest you bring up, including on failure.
+  `beekeeper nuke --yes` destroys them all.
+- Check `beekeeper status` for `free_mb` before making several.
+- A guest has an unprivileged `attacker` user with no sudo, plus
+  key-based root ssh. Build and run tests as `attacker`; use root only
+  where a test genuinely needs privilege.
+- A fresh guest may not have a rust toolchain. Install it with
+  `pkg install ooce/developer/rust`, and **wait for `cargo --version`
+  to answer before trusting any build output** — a missing toolchain
+  makes every grep-based check match nothing, so a broken run looks
+  perfectly clean.
 - **Any ssh or scp to the hypervisor MUST be wrapped in a deadman
   timeout** (`timeout`, or `gtimeout` on macOS). An unwrapped remote
   call is blocked by a hook and leaves box-side processes hanging.
@@ -803,9 +813,9 @@ Using it:
 ### 8.3 Loop
 
 1. Bring up one VM per parallel agent, named for the work.
-2. `make vm-up` records the address in `.vm-ip`; every other `make`
-   target reads it, rsyncs the worktree, and runs cargo **on the VM**.
-   Nothing is built on the development machine.
+2. Pass the guest's address to every `make` target as `TARGET`. They
+   rsync the worktree and run cargo **on the guest**. Nothing is built
+   on the development machine.
 3. Iterate with `rubber`, or with `make test` / `make test-loop`.
 4. `down` the VM when the task ends, pass or fail.
 

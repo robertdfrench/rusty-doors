@@ -4,66 +4,87 @@ banner=printf "\033[35m== %s ==\033[0m\n" $@;
 
 # Doors are an illumos facility. This crate is not portable and does not
 # try to be: it does not compile anywhere else, and there is nothing
-# useful to learn from building it on a laptop. Every target below that
-# touches cargo runs it on the VM.
+# useful to learn from building it on a laptop. Every target here that
+# touches cargo runs it on an illumos machine.
 #
-# See GOALS.md section 8. `make vm-up` records the VM's address in
-# .vm-ip, and everything after that reads it, so you rarely pass VM_IP
-# by hand.
+# This Makefile does NOT create that machine. Bring one up yourself and
+# pass its address:
+#
+#     ssh root@omnios-big beekeeper up doors --ready usable
+#     make test TARGET=<the address it printed>
+#     ssh root@omnios-big beekeeper down doors
+#
+# Any illumos host with a rust toolchain will do; beekeeper is just a
+# convenient way to get a disposable one. See `ssh root@<hyp> beekeeper
+# help`.
 
+TARGET ?=
+USER_ON_TARGET ?= attacker
+REMOTE ?= /home/$(USER_ON_TARGET)/rusty-doors
+
+# The private key for the lab guests. beekeeper serves it:
+#     ssh root@omnios-big beekeeper labkey > ~/.ssh/beekeeper-labkey
+#     chmod 600 ~/.ssh/beekeeper-labkey
+# `make labkey HYP=<host>` does that for you.
+KEY ?= $(HOME)/.ssh/beekeeper-labkey
 HYP ?= omnios-big
-NIC ?= e1000g1
-VM_NAME ?= doors
-VM_USER ?= attacker
-KEY ?= ../starcrash/keys/labkey
-REMOTE ?= /home/$(VM_USER)/rusty-doors
-VM_IP ?= $(shell cat .vm-ip 2>/dev/null)
 
-# Fresh VMs are disposable and get a new address each time, so pinning
+# Lab guests are disposable and get a new address each time, so pinning
 # host keys would only ever produce false alarms.
 SSH = ssh -o BatchMode=yes -i $(KEY) -o IdentitiesOnly=yes \
 	-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 	-o ConnectTimeout=12
 
-# Every remote call is wrapped in a deadman timeout (GOALS.md 8.1).
+# Every remote call is wrapped in a deadman timeout.
 TIMEOUT = $(shell command -v timeout 2>/dev/null || command -v gtimeout)
 
 # cargo lands in /opt/ooce/bin, which a non-login shell does not pick up.
-CARGO_ENV = export PATH=/opt/ooce/bin:$$PATH;
+# `command -v cargo` first: without it, a missing toolchain makes every
+# grep-based check match nothing, and a broken run looks perfectly clean.
+CARGO_ENV = export PATH=/opt/ooce/bin:$$PATH; \
+	command -v cargo >/dev/null || { echo "no cargo on $(TARGET)" >&2; exit 1; };
 
 help: ##: Print this help menu
-	@echo "USAGE"
+	@echo "USAGE   (most targets need TARGET=<address>)"
 	@awk -F':' '/##:/ && !/awk/ { OFS="\t"; print "make "$$1,$$3 }' Makefile \
 		| sort
 
-require-vm:
-	@test -n "$(VM_IP)" || { \
-		echo "No VM. Run 'make vm-up' first, or pass VM_IP=<addr>." >&2; \
+require-target:
+	@test -n "$(TARGET)" || { \
+		echo "Set TARGET=<address> of an illumos host." >&2; \
+		echo "  ssh root@$(HYP) beekeeper up doors --ready usable" >&2; \
 		exit 1; }
 
-about: require-vm ##: Print version information from the VM
+labkey: ##: Fetch the lab private key from the hypervisor into $(KEY)
 	@$(banner)
-	@$(TIMEOUT) 60 $(SSH) $(VM_USER)@$(VM_IP) \
+	@$(TIMEOUT) 60 ssh -o BatchMode=yes -o ConnectTimeout=8 root@$(HYP) \
+		beekeeper labkey > $(KEY)
+	@chmod 600 $(KEY)
+	@echo "wrote $(KEY)"
+
+about: require-target ##: Print version information from the target
+	@$(banner)
+	@$(TIMEOUT) 60 $(SSH) $(USER_ON_TARGET)@$(TARGET) \
 		'$(CARGO_ENV) cargo --version; rustc --version; uname -a'
 
-sync: require-vm ##: Copy the worktree to the VM
+sync: require-target ##: Copy the worktree to the target
 	@$(TIMEOUT) 300 rsync -az --delete \
-		--exclude target/ --exclude .git/ --exclude .vm-ip \
-		-e "$(SSH)" ./ $(VM_USER)@$(VM_IP):$(REMOTE)/
+		--exclude target/ --exclude .git/ \
+		-e "$(SSH)" ./ $(USER_ON_TARGET)@$(TARGET):$(REMOTE)/
 
-build: sync ##: Build the workspace on the VM
+build: sync ##: Build the workspace on the target
 	@$(banner)
-	@$(TIMEOUT) 900 $(SSH) $(VM_USER)@$(VM_IP) \
+	@$(TIMEOUT) 900 $(SSH) $(USER_ON_TARGET)@$(TARGET) \
 		'$(CARGO_ENV) cd $(REMOTE) && cargo build --workspace --all-targets'
 
-test: sync ##: Run the whole test suite on the VM
+test: sync ##: Run the whole test suite on the target
 	@$(banner)
-	@$(TIMEOUT) 900 $(SSH) $(VM_USER)@$(VM_IP) \
+	@$(TIMEOUT) 900 $(SSH) $(USER_ON_TARGET)@$(TARGET) \
 		'$(CARGO_ENV) cd $(REMOTE) && cargo test --workspace'
 
-test-loop: sync ##: Run the suite N times on the VM to catch flaky failures (N=20)
+test-loop: sync ##: Run the suite N times to catch flaky failures (N=20)
 	@$(banner)
-	@$(TIMEOUT) 3000 $(SSH) $(VM_USER)@$(VM_IP) \
+	@$(TIMEOUT) 3000 $(SSH) $(USER_ON_TARGET)@$(TARGET) \
 		'$(CARGO_ENV) cd $(REMOTE); p=0; f=0; \
 		 for i in $$(seq $(or $(N),20)); do \
 		   if cargo test --workspace >/tmp/run.log 2>&1; then p=$$((p+1)); \
@@ -71,43 +92,27 @@ test-loop: sync ##: Run the suite N times on the VM to catch flaky failures (N=2
 		   fi; \
 		 done; echo "pass=$$p fail=$$f"'
 
-format: sync ##: Check formatting and lints on the VM
+format: sync ##: Check formatting and lints on the target
 	@$(banner)
-	@$(TIMEOUT) 600 $(SSH) $(VM_USER)@$(VM_IP) \
+	@$(TIMEOUT) 600 $(SSH) $(USER_ON_TARGET)@$(TARGET) \
 		'$(CARGO_ENV) cd $(REMOTE) && cargo fmt --all -- --check \
-		 && cargo clippy --workspace --all-targets'
+		 && cargo clippy --workspace --all-targets --features rpc'
 
-docs: sync ##: Build documentation on the VM
+docs: sync ##: Build documentation on the target
 	@$(banner)
-	@$(TIMEOUT) 600 $(SSH) $(VM_USER)@$(VM_IP) \
+	@$(TIMEOUT) 600 $(SSH) $(USER_ON_TARGET)@$(TARGET) \
 		'$(CARGO_ENV) cd $(REMOTE) && cargo doc --workspace --no-deps'
 
-shell: require-vm ##: Open a shell on the VM in the synced worktree
-	@$(SSH) -t $(VM_USER)@$(VM_IP) '$(CARGO_ENV) cd $(REMOTE); exec bash -l'
-
-all: about build format test docs ##: Run the full pipeline on the VM
-
-# --- VM lifecycle ----------------------------------------------------
-
-vm-up: ##: Spin a fresh illumos VM, install rust, record its IP
+examples: sync ##: Build the example servers on the target
 	@$(banner)
-	@cd ../starcrash && NIC='$(NIC)' sh fart/vm.sh up '$(HYP)' '$(VM_NAME)' \
-		| tail -1 > $(CURDIR)/.vm-ip
-	@echo "VM at $$(cat .vm-ip)"
-	@$(TIMEOUT) 900 $(SSH) root@$$(cat .vm-ip) \
-		'pkg install -q ooce/developer/rust || true'
-	@$(MAKE) --no-print-directory about
+	@$(TIMEOUT) 900 $(SSH) $(USER_ON_TARGET)@$(TARGET) \
+		'$(CARGO_ENV) cd $(REMOTE) && cargo build --examples --features rpc'
 
-vm-down: ##: Destroy the VM. Always do this when you are finished.
-	@$(banner)
-	@cd ../starcrash && NIC='$(NIC)' sh fart/vm.sh down '$(HYP)' '$(VM_NAME)'
-	@rm -f .vm-ip
+shell: require-target ##: Open a shell on the target in the synced worktree
+	@$(SSH) -t $(USER_ON_TARGET)@$(TARGET) \
+		'export PATH=/opt/ooce/bin:$$PATH; cd $(REMOTE); exec bash -l'
 
-vm-status: ##: List the fart VMs on the hypervisor
-	@$(TIMEOUT) 60 ssh -o BatchMode=yes -o ConnectTimeout=8 \
-		root@$(HYP) 'fart status; fart ls'
-
-# --- release ---------------------------------------------------------
+all: about build format test docs ##: Run the full pipeline on the target
 
 publish: ##: Publish all crates in this workspace to crates.io
 	@$(banner)
@@ -121,5 +126,5 @@ publish: ##: Publish all crates in this workspace to crates.io
 
 hook: .git/hooks/pre-commit ##: Run 'make all' as a pre-commit hook
 
-.PHONY: help require-vm about sync build test test-loop format docs shell \
-	all vm-up vm-down vm-status publish hook
+.PHONY: help require-target labkey about sync build test test-loop format \
+	docs examples shell all publish hook

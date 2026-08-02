@@ -90,15 +90,19 @@ rather than documents:
 Doors are an illumos facility, so this crate is illumos only. It does
 not build on any other system, and it does not try to.
 
-Everything runs on a disposable illumos VM. `make vm-up` records the
-address, so the rest of the targets need no arguments:
+Everything runs on an illumos machine. The Makefile does not create
+one; bring up a disposable guest, pass its address as `TARGET`, and
+tear it down when you are done:
 
 ```sh
-make vm-up          # spin a VM, install rust, remember the address
-make test           # rsync the worktree there and run the suite
-make test-loop N=20 # the same, N times, to catch flaky failures
-make vm-down        # always, pass or fail
+ssh root@omnios-big beekeeper up doors --ready usable
+make test TARGET=<address>          # rsync the worktree, run the suite
+make test-loop TARGET=<address> N=20  # the same, N times, for flaky failures
+ssh root@omnios-big beekeeper down doors
 ```
+
+Any illumos host with a rust toolchain works. `make labkey` fetches the
+key for the lab guests.
 
 Nothing is compiled on your own machine. There is no reason to: the
 crate does not build anywhere but illumos, and a doors crate that
