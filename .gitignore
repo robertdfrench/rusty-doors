@@ -3,3 +3,8 @@
 
 # Vim
 *.swp
+
+# TLA+ tooling and TLC scratch output
+specs/tla2tools.jar
+specs/states/
+specs/*_TTrace_*
