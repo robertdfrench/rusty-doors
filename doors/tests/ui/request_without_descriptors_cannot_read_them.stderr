@@ -1,0 +1,5 @@
+error[E0599]: no method named `descriptors` found for struct `doors::Request<'_>` in the current scope
+ --> tests/ui/request_without_descriptors_cannot_read_them.rs:7:17
+  |
+7 |     let _ = req.descriptors();
+  |                 ^^^^^^^^^^^ private field, not a method

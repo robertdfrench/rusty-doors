@@ -1,0 +1,20 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+[package]
+name = "doors-sys"
+version = "0.1.0"
+edition = "2021"
+authors = ["Robert D. French <robert@robertdfrench.me>"]
+description = "Raw FFI bindings for the illumos Doors API"
+license = "MPL-2.0"
+repository = "https://github.com/robertdfrench/rusty-doors"
+documentation = "https://docs.rs/doors-sys"
+
+[dependencies]
+libc = "0.2"
+
+# docs.rs builds on linux, where this crate does not compile at all.
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-illumos"

@@ -1,267 +1,128 @@
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- *
- * Copyright 2023 Robert D. French
- */
-//! A Rust-friendly interface for [illumos Doors][1].
-//!
-//! [Doors][2] are a high-speed, RPC-style interprocess communication facility
-//! for the [illumos][3] operating system. They enable rapid dialogue between
-//! client and server without giving up the CPU timeslice, and are an excellent
-//! alternative to pipes or UNIX domain sockets in situations where IPC latency
-//! matters.
-//!
-//! This crate makes it easier to interact with the Doors API from Rust. It can
-//! help you create clients, define server procedures, and open or create doors
-//! on the filesystem.
-//! [1]: https://github.com/robertdfrench/revolving-doors
-//! [2]: https://illumos.org/man/3C/door_create
-//! [3]: https://illumos.org
-pub use door_macros::server_procedure;
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-pub mod illumos;
+//! A Rust interface for [illumos Doors][1].
+//!
+//! Doors are a fast way for two processes on the same machine to talk.
+//! A client calls a door; the kernel runs a procedure in the server
+//! process on the calling thread's behalf and comes straight back,
+//! without ever giving up the CPU. When latency matters they beat
+//! pipes and UNIX domain sockets.
+//!
+//! # illumos only
+//!
+//! Doors are an illumos facility. This crate is for illumos and
+//! nothing else. It does not build on any other system, and it does
+//! not try to: there are no stubs and no fallbacks. Build it, test
+//! it and run it on illumos.
+//!
+//! # What this crate is for
+//!
+//! The C interface is fast but hard to use correctly. The problems are
+//! not mostly about memory safety; they are about things the type
+//! system could enforce and C cannot:
+//!
+//! - Nothing stops a client sending descriptors to a door that refuses
+//!   them. Here, a [`Client<NoDescriptors>`] has no method that sends
+//!   one, so the mistake is a compile error.
+//! - A client that receives a large reply gets a fresh memory mapping
+//!   and must remember to unmap it. Here, [`Reply`] unmaps on `Drop`,
+//!   always.
+//! - `door_return(3C)` usually does not return, so no destructor on
+//!   the server thread ever runs. Here, the generated trampoline drops
+//!   everything before calling it. See [`server::trampoline`].
+//! - A door does not survive `fork`, but the descriptor does, and a
+//!   careless child tears down the parent's door. Here, [`fork`]
+//!   handles that, with a `pthread_atfork` backstop for forks that go
+//!   around it.
+//!
+//! # Calling a door
+//!
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use doors::Client;
+//!
+//! let client = Client::open("/var/run/my_door")?;
+//! let reply = client.call(b"ping")?;
+//! println!("{}", String::from_utf8_lossy(reply.data()));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Serving a door
+//!
+//! ```ignore
+//! struct Greeter { greeting: String }
+//!
+//! #[doors::server]
+//! impl Greeter {
+//!     #[door(refuse_desc)]
+//!     fn hello(&self, req: Request<'_, NoDescriptors>)
+//!         -> Result<Vec<u8>, std::io::Error>
+//!     {
+//!         Ok(format!("{}, {}", self.greeting,
+//!                    String::from_utf8_lossy(req.data())).into_bytes())
+//!     }
+//! }
+//!
+//! let mut door = Door::builder(Greeter { greeting: "hello".into() })
+//!     .thread_stack_size(256 * 1024)
+//!     .build_hello()?;
+//! door.attach("/var/run/my_door")?;
+//! ```
+//!
+//! # A warning about shared libraries
+//!
+//! This crate registers `pthread_atfork` handlers the first time a
+//! door is built, and there is no way to unregister them. If it is
+//! linked into a `cdylib` that is later `dlclose`d, those handlers
+//! point into unmapped memory and the next `fork` in that process
+//! crashes.
+//!
+//! Link it into an executable. That is the ordinary case for a door
+//! server anyway; a door that comes and goes with a shared library
+//! would be a strange thing to build.
+//!
+//! [1]: https://illumos.org/man/3C/door_create
+//! [`Client<NoDescriptors>`]: Client
+
+#![deny(missing_docs)]
+#![warn(clippy::undocumented_unsafe_blocks)]
+
+mod client;
+mod descriptor;
+mod error;
+mod registry;
+mod sys;
+mod types;
+
 pub mod server;
 
-use crate::illumos::door_h::door_arg_t;
-use crate::illumos::door_h::door_call;
-use crate::illumos::errno_h::errno;
-use crate::illumos::DoorArg;
-use crate::illumos::DoorFd;
-use std::fs::File;
-use std::io;
-use std::os::fd::FromRawFd;
-use std::os::fd::IntoRawFd;
-use std::os::fd::RawFd;
-use std::path::Path;
+#[doc(hidden)]
+pub mod __private;
 
-pub use illumos::UCred;
+pub use client::{Client, DoorParams, Reply, Untagged};
+pub use descriptor::{
+    DescAttributes, DescriptorPolicy, Descriptors, DoorId, NoDescriptors,
+    ReceivedFd, SentFd,
+};
+pub use error::{
+    CallError, Error, ErrorReply, ReplyTooBig, RevokeError, ServerFault,
+};
+pub use registry::{fork, ForkResult};
+pub use server::{
+    Door, DoorBuilder, DoorInfo, ReplyBuf, ReplyProtocol, Request, UCred,
+};
 
-/// Failure conditions for [`door_call`].
+/// A non-zero errno.
 ///
-/// According to [`door_call(3C)`], if a [`door_call`] fails, errno will be set
-/// to one of these values. While this enum is not strictly derived from
-/// anything in [doors.h][1], it is spelled out in the man page.
+/// Re-exported from `doors-sys` so callers can match on a system error
+/// without depending on the raw layer directly.
+pub use doors_sys::Errno;
+
+/// Turn a Rust `impl` block into a door server.
 ///
-/// [`door_call(3C)`]: https://illumos.org/man/3C/door_call
-/// [1]: https://github.com/illumos/illumos-gate/blob/master/usr/src/uts/common/sys/door.h
-#[derive(Debug, PartialEq)]
-pub enum DoorCallError {
-    /// Arguments were too big for server thread stack.
-    E2BIG,
-
-    /// Server was out of available resources.
-    EAGAIN,
-
-    /// Invalid door descriptor was passed.
-    EBADF,
-
-    /// Argument pointers pointed outside the allocated address space.
-    EFAULT,
-
-    /// A signal was caught in the client, the client called [`fork(2)`], or the
-    /// server exited during invocation.
-    ///
-    /// [`fork(2)`]: https://illumos.org/man/2/fork
-    EINTR,
-
-    /// Bad arguments were passed.
-    EINVAL,
-
-    /// The client or server has too many open descriptors.
-    EMFILE,
-
-    /// The desc_num argument is larger than the door's `DOOR_PARAM_DESC_MAX`
-    /// parameter (see [`door_getparam(3C)`]), and the door does not have the
-    /// [`DOOR_REFUSE_DESC`][crate::illumos::door_h::DOOR_REFUSE_DESC] set.
-    ///
-    /// [`door_getparam(3C)`]: https://illumos.org/man/3C/door_getparam
-    ENFILE,
-
-    /// The data_size argument is larger than the door's `DOOR_PARAM_DATA_MAX`
-    /// parameter, or smaller than the door's `DOOR_PARAM_DATA_MIN` parameter
-    /// (see [`door_getparam(3C)`]).
-    ///
-    /// [`door_getparam(3C)`]: https://illumos.org/man/3C/door_getparam
-    ENOBUFS,
-
-    /// The desc_num argument is non-zero and the door has the
-    /// [`DOOR_REFUSE_DESC`][crate::illumos::door_h::DOOR_REFUSE_DESC] flag set.
-    ENOTSUP,
-
-    /// System could not create overflow area in caller for results.
-    EOVERFLOW,
-}
-
-/// Less unsafe door client (compared to raw file descriptors)
-///
-/// Clients are automatically closed when they go out of scope. Errors detected
-/// on closing are ignored by the implementation of `Drop`, just like in
-/// [`File`].
-pub struct Client(RawFd);
-
-impl FromRawFd for Client {
-    unsafe fn from_raw_fd(raw: RawFd) -> Self {
-        Self(raw)
-    }
-}
-
-impl Drop for Client {
-    /// Automatically close the door on your way out.
-    ///
-    /// This will close the file descriptor associated with this door, so that
-    /// this process will no longer be able to call this door. For that reason,
-    /// it is a programming error to [`Clone`] this type.
-    fn drop(&mut self) {
-        unsafe { libc::close(self.0) };
-    }
-}
-
-pub enum DoorArgument {
-    BorrowedRbuf(DoorArg),
-    OwnedRbuf(DoorArg),
-}
-
-impl DoorArgument {
-    pub fn new(
-        data: &[u8],
-        descriptors: &[DoorFd],
-        response: &mut [u8],
-    ) -> Self {
-        Self::borrowed_rbuf(data, descriptors, response)
-    }
-
-    pub fn borrowed_rbuf(
-        data: &[u8],
-        descriptors: &[DoorFd],
-        response: &mut [u8],
-    ) -> Self {
-        Self::BorrowedRbuf(DoorArg::new(data, descriptors, response))
-    }
-
-    pub fn owned_rbuf(
-        data: &[u8],
-        descriptors: &[DoorFd],
-        response: &mut [u8],
-    ) -> Self {
-        Self::OwnedRbuf(DoorArg::new(data, descriptors, response))
-    }
-
-    fn inner(&self) -> &DoorArg {
-        match self {
-            Self::BorrowedRbuf(inner) => inner,
-            Self::OwnedRbuf(inner) => inner,
-        }
-    }
-
-    fn inner_mut(&mut self) -> &mut DoorArg {
-        match self {
-            Self::BorrowedRbuf(inner) => inner,
-            Self::OwnedRbuf(inner) => inner,
-        }
-    }
-
-    pub fn as_door_arg_t(&self) -> &door_arg_t {
-        self.inner().as_door_arg_t()
-    }
-
-    pub fn data(&self) -> &[u8] {
-        self.inner().data()
-    }
-
-    pub fn rbuf(&self) -> &[u8] {
-        self.inner().rbuf()
-    }
-}
-
-impl Drop for DoorArgument {
-    fn drop(&mut self) {
-        if let Self::OwnedRbuf(arg) = self {
-            // If munmap fails, we do want to panic, because it means we've
-            // tried to munmap something that wasn't mapped into our address
-            // space. That should never happen, but if it does, it's worth
-            // crashing, because something else is seriously wrong.
-            arg.munmap_rbuf().unwrap()
-        }
-    }
-}
-
-impl Client {
-    /// Open a door client like you would a file
-    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        let file = File::open(path)?;
-        Ok(Self(file.into_raw_fd()))
-    }
-
-    /// Issue a door call
-    ///
-    /// You are responsible for managing this memory. See [`DOOR_CALL(3C)`].
-    /// Particularly, if, after a `door_call`, the `rbuf` property of
-    /// [`door_arg_t`] is different than what it was before the `door_call`, you
-    /// are responsible for reclaiming this area with [`MUNMAP(2)`] when you are
-    /// done with it.
-    ///
-    /// This crate cannot yet handle this for you. See [Issue
-    /// #11](https://github.com/robertdfrench/rusty-doors/issues/11).
-    ///
-    /// [`DOOR_CALL(3C)`]: https://illumos.org/man/3C/door_call
-    /// [`MUNMAP(2)`]: https://illumos.org/man/2/munmap
-    pub fn call(
-        &self,
-        mut arg: DoorArgument,
-    ) -> Result<DoorArgument, DoorCallError> {
-        let a = arg.inner().rbuf_addr();
-        let x = arg.inner_mut().as_mut_door_arg_t();
-        match unsafe { door_call(self.0, x) } {
-            0 => match (x.rbuf as u64) == a {
-                true => Ok(arg),
-                false => {
-                    let data = unsafe {
-                        std::slice::from_raw_parts(
-                            x.data_ptr as *const u8,
-                            x.data_size,
-                        )
-                    };
-                    let desc = unsafe {
-                        std::slice::from_raw_parts(
-                            x.desc_ptr as *const DoorFd,
-                            x.desc_num.try_into().unwrap(),
-                        )
-                    };
-                    let rbuf = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            x.rbuf as *mut u8,
-                            x.rsize,
-                        )
-                    };
-                    Ok(DoorArgument::owned_rbuf(data, desc, rbuf))
-                }
-            },
-            _ => Err(match errno() {
-                libc::E2BIG => DoorCallError::E2BIG,
-                libc::EAGAIN => DoorCallError::EAGAIN,
-                libc::EBADF => DoorCallError::EBADF,
-                libc::EFAULT => DoorCallError::EFAULT,
-                libc::EINTR => DoorCallError::EINTR,
-                libc::EINVAL => DoorCallError::EINVAL,
-                libc::EMFILE => DoorCallError::EMFILE,
-                libc::ENFILE => DoorCallError::ENFILE,
-                libc::ENOBUFS => DoorCallError::ENOBUFS,
-                libc::ENOTSUP => DoorCallError::ENOTSUP,
-                libc::EOVERFLOW => DoorCallError::EOVERFLOW,
-                _ => unreachable!(),
-            }),
-        }
-    }
-
-    /// Issue a door call with Data only
-    ///
-    pub fn call_with_data(
-        &self,
-        data: &[u8],
-    ) -> Result<DoorArgument, DoorCallError> {
-        let arg = DoorArgument::new(data, &[], &mut []);
-        self.call(arg)
-    }
-}
+/// See the [crate docs](crate) for an example, and `GOALS.md` §3 for
+/// the full list of `#[door(...)]` options.
+pub use door_macros::server;

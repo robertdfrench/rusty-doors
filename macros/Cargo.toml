@@ -1,6 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 [package]
 name = "door-macros"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 authors = ["Robert D. French <robert@robertdfrench.me>"]
 description = "Macros for the 'doors' crate"
@@ -12,8 +16,17 @@ documentation = "https://docs.rs/doors"
 proc-macro = true
 
 [dependencies]
-syn = { version = "1.0", features = ["full", "extra-traits", "printing"] }
-quote = "1.0"
+syn = { version = "2.0", features = [
+	"full",
+	"extra-traits",
+	"printing",
+	"parsing",
+] }
+quote = "1"
+proc-macro2 = "1"
 
+# `doors` is NOT a dev-dependency. It depends on this crate, so adding
+# it back would make a dependency cycle. Everything here is tested by
+# calling `expand` directly on token streams (GOALS.md §3.1).
 [dev-dependencies]
-doors = { version = "~0", path = "../doors" }
+trybuild = "1"

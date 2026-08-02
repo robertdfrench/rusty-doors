@@ -1,0 +1,365 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+//! Every error this crate can produce.
+
+use crate::descriptor::DoorId;
+use doors_sys::Errno;
+use std::fmt;
+use std::os::fd::OwnedFd;
+
+/// The status byte that leads every trampoline reply.
+///
+/// See `GOALS.md` §3.9. The server writes one of these, then the
+/// payload; the client reads it back and turns tags 1 and 2 into
+/// [`CallError::Server`] and [`CallError::ServerFailed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum StatusTag {
+    /// The payload is the user function's reply bytes.
+    Ok = 0,
+    /// The user function returned `Err(E)`; the payload is `E`'s
+    /// encoding.
+    UserError = 1,
+    /// Infrastructure failure; the payload is a [`ServerFault`]
+    /// discriminant.
+    Fault = 2,
+}
+
+impl StatusTag {
+    /// Read a tag off the wire. Anything we did not write is a
+    /// protocol error rather than a silently accepted default.
+    pub(crate) fn from_byte(b: u8) -> Option<Self> {
+        match b {
+            0 => Some(Self::Ok),
+            1 => Some(Self::UserError),
+            2 => Some(Self::Fault),
+            _ => None,
+        }
+    }
+}
+
+/// A failure inside the crate's own machinery, rather than in the
+/// user's server procedure.
+///
+/// Deliberately carries no detail from the server process. A panic
+/// message can hold anything the server had in scope, and shipping it
+/// to whoever called the door would leak it across a trust boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ServerFault {
+    /// The server procedure panicked and `catch_unwind` caught it.
+    Panicked,
+    /// The cookie could not be resolved to live server state. The door
+    /// is being revoked, or the slab entry is gone.
+    StateUnavailable,
+    /// The reply did not fit in the server's [`ReplyBuf`] and the hard
+    /// cap refused to grow.
+    ///
+    /// [`ReplyBuf`]: crate::server::ReplyBuf
+    ReplyTooBig,
+}
+
+impl ServerFault {
+    pub(crate) fn as_byte(self) -> u8 {
+        match self {
+            Self::Panicked => 0,
+            Self::StateUnavailable => 1,
+            Self::ReplyTooBig => 2,
+        }
+    }
+
+    pub(crate) fn from_byte(b: u8) -> Option<Self> {
+        match b {
+            0 => Some(Self::Panicked),
+            1 => Some(Self::StateUnavailable),
+            2 => Some(Self::ReplyTooBig),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for ServerFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Panicked => "the server procedure panicked",
+            Self::StateUnavailable => "the server state was unavailable",
+            Self::ReplyTooBig => "the reply exceeded the server's limit",
+        };
+        f.write_str(s)
+    }
+}
+
+impl std::error::Error for ServerFault {}
+
+/// The reply did not fit, and the buffer is not allowed to grow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplyTooBig {
+    /// How many bytes the reply needed.
+    pub needed: usize,
+    /// The cap that refused it.
+    pub limit: usize,
+}
+
+impl fmt::Display for ReplyTooBig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "reply needs {} bytes but the limit is {}",
+            self.needed, self.limit
+        )
+    }
+}
+
+impl std::error::Error for ReplyTooBig {}
+
+/// A general failure from a doors operation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Error {
+    /// A system call failed. Carries the errno and which call it was.
+    Sys {
+        /// Which C function failed.
+        call: &'static str,
+        /// The errno it left behind.
+        errno: Errno,
+    },
+    /// The door was disowned by a `fork`, so this process must not act
+    /// on it. See `GOALS.md` §7.
+    Disowned,
+    /// The door refuses descriptors, so
+    /// [`Client::with_descriptors`](crate::Client::with_descriptors)
+    /// cannot succeed.
+    RefusesDescriptors,
+    /// A path could not be represented as a C string, because it
+    /// contains an interior NUL.
+    PathHasNul,
+    /// The requested server thread stack is too small for the declared
+    /// request size. Request data, descriptors and `door_info_t` all
+    /// land on that stack.
+    StackTooSmall {
+        /// The stack size asked for.
+        requested: usize,
+        /// The smallest stack that could work.
+        needed: usize,
+    },
+    /// A limit was set both in `#[door(...)]` and on the builder, so
+    /// there is no way to tell which one was meant. See `GOALS.md`
+    /// §3.6.
+    OptionSetTwice {
+        /// The name of the option, as it is spelled in `#[door(...)]`.
+        option: &'static str,
+    },
+}
+
+impl Error {
+    pub(crate) fn sys(call: &'static str) -> Self {
+        Error::Sys {
+            call,
+            errno: crate::sys::last_errno(),
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Sys { call, errno } => {
+                write!(f, "{call} failed: errno {}", errno.get())
+            }
+            Error::Disowned => f.write_str(
+                "this door belongs to a process that forked away from it",
+            ),
+            Error::RefusesDescriptors => {
+                f.write_str("this door was created with DOOR_REFUSE_DESC")
+            }
+            Error::PathHasNul => {
+                f.write_str("path contains an interior NUL byte")
+            }
+            Error::StackTooSmall { requested, needed } => write!(
+                f,
+                "server thread stack of {requested} bytes is too small; \
+                 the declared request size needs at least {needed}"
+            ),
+            Error::OptionSetTwice { option } => write!(
+                f,
+                "`{option}` is set both in `#[door(...)]` and on the \
+                 builder; remove one of them"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<Error> for std::io::Error {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::Sys { errno, .. } => {
+                std::io::Error::from_raw_os_error(errno.get())
+            }
+            other => std::io::Error::other(other),
+        }
+    }
+}
+
+/// Why [`Door::revoke`](crate::Door::revoke) did not hand the state
+/// back.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RevokeError {
+    /// A `fork` disowned this door; the child must not revoke the
+    /// parent's door.
+    Disowned,
+    /// `door_revoke` itself failed.
+    Sys {
+        /// The errno it left behind.
+        errno: Errno,
+    },
+    /// The door was revoked and drained, but something outside the
+    /// crate still holds a reference to the state, so it cannot be
+    /// handed back by value.
+    StateStillShared,
+}
+
+impl fmt::Display for RevokeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RevokeError::Disowned => {
+                f.write_str("this door was disowned by a fork")
+            }
+            RevokeError::Sys { errno } => {
+                write!(f, "door_revoke failed: errno {}", errno.get())
+            }
+            RevokeError::StateStillShared => f.write_str(
+                "the door was revoked, but the state is still shared",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RevokeError {}
+
+/// Why a [`door_call`] did not produce a reply.
+///
+/// The descriptor rules here are not advisory. `door_call` consumes
+/// the descriptors it was given on almost every path, so which variant
+/// you get decides whether the caller still owns them.
+///
+/// [`door_call`]: crate::Client::call
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum CallError {
+    /// `EFAULT` or `EBADF`. The kernel rejected the call before taking
+    /// the descriptors, so any `Released` ones are handed back intact.
+    Rejected {
+        /// The descriptors the caller passed by value, returned.
+        returned: Vec<OwnedFd>,
+        /// The errno.
+        errno: Errno,
+    },
+    /// Any other errno. The kernel consumed the descriptors; there is
+    /// nothing to hand back.
+    Consumed(Errno),
+    /// The call was interrupted. **The server may already have run.**
+    /// The descriptors were consumed.
+    Interrupted,
+    /// The reply did not fit and the caller asked for no mapping.
+    ReplyTooBig {
+        /// How many bytes the reply needed.
+        needed: usize,
+    },
+    /// §3.9 tag 1: the server procedure returned `Err`.
+    Server {
+        /// The error's encoding, as the server wrote it.
+        data: Vec<u8>,
+    },
+    /// §3.9 tag 2: the server panicked or could not resolve its state.
+    ServerFailed(ServerFault),
+    /// The server sent a reply this crate cannot parse. Either it is
+    /// not a `doors` server, or the two sides disagree about the
+    /// protocol.
+    Protocol(&'static str),
+    /// A `Client<NoDescriptors>` received descriptors anyway. They have
+    /// already been closed; there is nothing for the caller to clean
+    /// up.
+    UnexpectedDescriptors {
+        /// How many arrived.
+        count: usize,
+    },
+}
+
+impl CallError {
+    /// The door ids of any descriptors involved, when we know them.
+    /// Present so callers can log without reaching for the raw union.
+    pub fn door_ids(&self) -> &[DoorId] {
+        &[]
+    }
+}
+
+impl fmt::Display for CallError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CallError::Rejected { returned, errno } => write!(
+                f,
+                "door_call rejected (errno {}); {} descriptor(s) returned",
+                errno.get(),
+                returned.len()
+            ),
+            CallError::Consumed(errno) => write!(
+                f,
+                "door_call failed (errno {}); descriptors were consumed",
+                errno.get()
+            ),
+            CallError::Interrupted => f.write_str(
+                "door_call was interrupted; the server may already have run",
+            ),
+            CallError::ReplyTooBig { needed } => {
+                write!(f, "reply needs {needed} bytes and would not fit")
+            }
+            CallError::Server { data } => {
+                write!(f, "the server returned an error ({} bytes)", data.len())
+            }
+            CallError::ServerFailed(fault) => write!(f, "{fault}"),
+            CallError::Protocol(why) => {
+                write!(f, "malformed reply: {why}")
+            }
+            CallError::UnexpectedDescriptors { count } => write!(
+                f,
+                "server sent {count} descriptor(s) to a client that does \
+                 not accept them; they have been closed"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CallError {}
+
+/// A server error that can be written into a reply.
+///
+/// Blanket-implemented for every `E: Display`, so most users never
+/// name this trait. Implement it directly when the encoding matters —
+/// a `postcard` payload the client will decode, say, rather than the
+/// `Display` text.
+pub trait ErrorReply {
+    /// Write this error into the reply buffer.
+    fn write_error(
+        self,
+        out: &mut crate::server::ReplyBuf,
+    ) -> Result<(), ReplyTooBig>;
+}
+
+impl<E: fmt::Display> ErrorReply for E {
+    fn write_error(
+        self,
+        out: &mut crate::server::ReplyBuf,
+    ) -> Result<(), ReplyTooBig> {
+        use std::fmt::Write as _;
+        // Writing through fmt::Write means a Display impl that panics
+        // is the user's problem, not a silent truncation. The buffer
+        // records an overflow rather than growing past its cap.
+        let _ = write!(out, "{self}");
+        out.overflow().map_or(Ok(()), Err)
+    }
+}

@@ -1,0 +1,11 @@
+error[E0599]: no method named `call_with_descriptors` found for reference `&Client` in the current scope
+  --> tests/ui/client_without_descriptors_cannot_send_them.rs:10:20
+   |
+10 |     let _ = client.call_with_descriptors(b"payload", fds);
+   |                    ^^^^^^^^^^^^^^^^^^^^^
+   |
+help: there is a method `with_descriptors` with a similar name, but with different arguments
+  --> src/client.rs
+   |
+   |     pub fn with_descriptors(self) -> Result<Client<Descriptors>, Error> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

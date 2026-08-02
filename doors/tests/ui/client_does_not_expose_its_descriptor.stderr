@@ -1,0 +1,5 @@
+error[E0599]: no method named `as_raw_fd` found for reference `&Client` in the current scope
+ --> tests/ui/client_does_not_expose_its_descriptor.rs:7:12
+  |
+7 |     client.as_raw_fd()
+  |            ^^^^^^^^^ method not found in `&Client`

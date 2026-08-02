@@ -1,0 +1,5 @@
+error[E0599]: no method named `as_raw_fd` found for reference `&Door<String>` in the current scope
+ --> tests/ui/door_does_not_expose_its_descriptor.rs:9:10
+  |
+9 |     door.as_raw_fd()
+  |          ^^^^^^^^^ method not found in `&Door<String>`
